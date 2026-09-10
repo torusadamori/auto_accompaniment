@@ -28,6 +28,7 @@ BLEは成功済みのホストvenvで受信する。ArduinoライブラリはApp
 
 | ファイル | 役割 |
 |---|---|
+| `scripts/m3_run_unoq.sh`, `m3/launcher.py` | ワンコマンド起動・保護付きApp同期 |
 | `m3/midi.py` | ハードウェア非依存パーサ、active note set |
 | `m3/receiver.py` | ホストBLE購読、ログ、状態変更・heartbeat送信 |
 | `m3/requirements.txt` | ホスト用Bleak（実験済みバージョン） |
@@ -37,6 +38,60 @@ BLEは成功済みのホストvenvで受信する。ArduinoライブラリはApp
 | `tests/test_midi.py`, `tests/test_transport.py` | パーサ・状態・通信テスト |
 
 このリポジトリには以前の実機Bridgeコードは収録されていなかった。実機の成功済みプロジェクトは保存し、必ずコピーを編集する。`app.yaml` / `sketch.yaml` のバージョン・依存ライブラリ設定もその成功済みコピーから引き継ぐ。`experiments/m3_app` 単体を完成したApp Labインポート用パッケージとして扱わない。
+
+## ワンコマンド起動（推奨）
+
+既存の `~/auto_accompaniment`、`~/blemidi`、M3 Appのコピーを利用する。初回はrepo rootで `git pull --ff-only` してこのスクリプトを取得する。以降はこれだけでよい：
+
+```bash
+./scripts/m3_run_unoq.sh
+```
+
+スクリプト自身の位置からrepo rootを特定するため、別ディレクトリから絶対パスで呼んでも動作する。venvのactivate、ファイルの手動コピー、アドレス/socketを含む長いコマンド入力は不要。
+
+実行順序：
+
+1. `~/blemidi/bin/python` と、既存Appの `app.yaml` を確認する。
+2. Appの `python/main.py`、`python/led_relay.py`、`sketch/sketch.ino` をrepoと比較する。
+3. 必要なファイルだけを同期する。既存ファイルを置換する場合は、まずApp内の `.m3-backups/<日時>-<識別子>/` に全原本のバックアップを作成する。
+4. `bleak==3.0.2` を確認する（自動pip installはしない）。
+5. `/home/arduino/ArduinoApps/m3-ble-to-led/m3-led.sock` を確認する。まだ無ければ **「App LabでM3 BLE to LEDをRunしてください」** と表示して最大120秒待つ。Runすると同じコマンドが続行する。タイムアウトなら理由付きで終了し、Run後に同じコマンドを再実行する。
+6. 同じvenv Pythonで `m3.receiver` を起動し、`9C:C3:94:81:01:53` からのnotifyを待つ。終了はCtrl+C。
+
+App Lab 0.10.0の実機で安全に起動できるCLI経路は、このrepo・現在アクセス可能な環境では確認できていない。そのためCLI/Dockerによる起動やMCU書き込みの推測実装はせず、App LabのRun操作だけを残す。iPhone側はこれまで同様、MIDIアプリを送信可能な状態にする。
+
+### ファイル保護
+
+- 内容が一致するファイルは書き換えない。通常のreceiverだけの更新ではAppの再起動は不要。
+- 異なる既存ファイルは、repoの過去のM3版と完全一致するものだけ自動更新する。App Lab上の独自編集・貼り付け差分・履歴のない版は保護して停止する。
+- 独自編集をrepo版に置き換える場合は、まず `./scripts/m3_run_unoq.sh --dry-run --sync-existing` で対象を確認し、必要なら `./scripts/m3_run_unoq.sh --sync-existing` でバックアップ付き同期する。自動mergeはしない。
+- 同期が必要なのにsocketが残っている場合は、稼働中かどうかを推測せず停止する。App LabでM3をStopしてから同じコマンドを実行し、同期後の案内に従ってRunする。この更新時だけStop/Runが必要。
+- `app.yaml`、`sketch.yaml`、その他のAppファイルは変更しない。Appや対象ファイルがsymlinkの場合は拒否する。成功済みの別Appを上書きしないよう、表示されるAppパスを確認する。
+- socketの存在・種類・権限を確認するが、確認目的の接続/LED操作はしない。実際の接続・最初のOFF ACKはreceiverで行う。古いsocketが残って接続拒否になる場合は既存の復旧手順を使う。socketを自動削除しない。
+
+### オプション
+
+```bash
+./scripts/m3_run_unoq.sh --dry-run       # 読み取りのみ。コピー・待機・BLE接続なし
+./scripts/m3_run_unoq.sh --pull          # clean treeでgit pull --ff-only後に実行
+./scripts/m3_run_unoq.sh --raw           # 生BLEパケットも表示
+./scripts/m3_run_unoq.sh --wait-seconds 0 # リレー未起動時は待たずに案内して終了
+```
+
+通常起動ではネットワークに依存するgit更新を行わない。`--pull` は未commit/未追跡変更があると停止し、stash/reset/強制更新は行わない。pull失敗時も受信を開始しない。更新後は新しいlauncherを読み直す。`--dry-run --pull` は実際にはpullせず、現在のcheckoutだけを確認する。
+
+環境を変更したときだけ以下を使う（通常は設定不要）：
+
+| 設定 | 方法 | デフォルト |
+|---|---|---|
+| venv | 環境変数 `M3_VENV` | `~/blemidi` |
+| App dir | `--app-dir` または `M3_APP_DIR` | `/home/arduino/ArduinoApps/m3-ble-to-led` |
+| iPhone | `--address` または `M3_BLE_ADDRESS` | `9C:C3:94:81:01:53` |
+| socket | `--socket` | 指定App dir内の `m3-led.sock` |
+
+バックアップから戻す場合はM3をStopし、表示されたバックアップディレクトリの必要なファイルを対応するAppの場所へ戻す。再起動はApp LabのRunを使う。
+
+以下は初回セットアップや問題切り分け時の手動手順として残す。
 
 ## 起動手順
 
@@ -155,7 +210,7 @@ NOTE OFF ch=1 note=64 vel=0 active=0
 
 ## 検証結果（開発PC、2026-09-10）
 
-開発PCで36テストを実行し、35件成功・Unix socketの1件skip。compileallも成功。
+開発PCで50テストを実行し、49件成功・Unix socketの1件skip。compileallとBash構文チェックも成功。launcherの同期/バックアップ/上書き拒否/dry-run/git更新/receiver引数を含む。UNO Q上のスクリプト実行は未検証。
 
 WindowsのPythonでパーサ・active set・TCPフレーム・EOF・期限切れ・RPC失敗・疑似Bridgeへの統合経路をテストする。Unix socketを提供しないPythonではその1件を明示的skipする。UNO QのLinux Pythonでは同じテストがUnix socketの接続・ACK・ファイル削除も検証する。
 

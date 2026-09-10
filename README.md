@@ -117,6 +117,18 @@ Loopian_RustはMIT Licenseです。コードを直接再利用する場合は、
 - [M3 BLE to MCU LED](docs/M3_BLE_TO_MCU.md) — ホストBLE受信から内蔵LEDまでの最小統合テスト
 - [CLAUDE.md](CLAUDE.md) — Claude Code向けプロジェクト指示
 
+## UNO QでM3をワンコマンド実行
+
+UNO Qホストのこのrepo rootで実行します。初めてスクリプトを取得するときだけ `git pull --ff-only` が必要です。
+
+```bash
+./scripts/m3_run_unoq.sh
+```
+
+`~/blemidi/bin/python` を直接使うため `source` は不要です。App側の同期とsocket確認を行い、未起動なら「App LabでM3 BLE to LEDをRunしてください」と表示して最大120秒待ち、そのままBLE受信を開始します。
+
+更新も行う場合は `./scripts/m3_run_unoq.sh --pull`、変更せず確認する場合は `./scripts/m3_run_unoq.sh --dry-run`。独自編集の保護・バックアップ付き同期・環境変更は [M3手順書](docs/M3_BLE_TO_MCU.md#ワンコマンド起動推奨) を参照してください。
+
 ## ローカル開発パス
 
 ```text
