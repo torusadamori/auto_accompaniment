@@ -31,11 +31,6 @@ if command -v bluetoothctl >/dev/null 2>&1; then
 else
     printf 'UNOQ setup: WARN: bluetoothctl not found; check the UNO Q BlueZ installation\n' >&2
 fi
-if command -v pw-dump >/dev/null 2>&1 || [[ -e /dev/snd/seq ]]; then
-    printf 'UNOQ setup: Linux MIDI infrastructure found (PipeWire or ALSA sequencer)\n'
-else
-    printf 'UNOQ setup: WARN: neither pw-dump nor /dev/snd/seq is available; doctor.sh will identify the missing BLE-MIDI route\n' >&2
-fi
 if command -v arduino-app-cli >/dev/null 2>&1; then
     printf 'UNOQ setup: App CLI found: '
     arduino-app-cli version 2>/dev/null || arduino-app-cli --version 2>/dev/null || printf 'version unavailable\n'

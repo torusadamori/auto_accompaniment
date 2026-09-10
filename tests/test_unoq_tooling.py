@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from unoq import deploy, doctor, runtime
+from unoq import deploy, doctor
 
 
 class DeployTests(unittest.TestCase):
@@ -85,38 +85,6 @@ class DeployTests(unittest.TestCase):
         run.assert_called_once_with(
             ["arduino-app-cli", "app", "stop", str(self.app)], check=True
         )
-
-    def test_stop_removes_only_confirmed_stale_socket_after_timeout(self):
-        relay_socket = self.app / "relay.sock"
-        with patch("unoq.deploy.socket_present", return_value=True), \
-                patch("unoq.deploy.relay_probe", return_value=(False, "refused")), \
-                patch("unoq.deploy.subprocess.run"), \
-                patch("unoq.deploy.remove_stale_socket") as remove:
-            deploy.stop_running_app(self.app, relay_socket, 1)
-        remove.assert_called_once_with(relay_socket, self.app, app_stopped=True)
-
-    def test_stop_never_removes_socket_with_live_listener(self):
-        relay_socket = self.app / "relay.sock"
-        with patch("unoq.deploy.socket_present", return_value=True), \
-                patch("unoq.deploy.relay_probe", return_value=(True, "reply")), \
-                patch("unoq.deploy.time.monotonic", side_effect=[0, 2]), \
-                patch("unoq.deploy.subprocess.run"), \
-                patch("unoq.deploy.remove_stale_socket") as remove:
-            with self.assertRaisesRegex(RuntimeError, "still answers"):
-                deploy.stop_running_app(self.app, relay_socket, 1)
-        remove.assert_not_called()
-
-
-class RuntimeTests(unittest.TestCase):
-    def test_app_status_parses_official_json(self):
-        result = type("Result", (), {
-            "returncode": 0,
-            "stdout": '{"apps":[{"name":"m3-ble-to-led","status":"Running"}]}',
-            "stderr": "",
-        })()
-        with patch("unoq.runtime.subprocess.run", return_value=result):
-            state, detail = runtime.app_lab_status(Path("/apps/m3-ble-to-led"))
-        self.assertEqual((state, detail), ("running", "Running"))
 
 
 class DoctorReportTests(unittest.TestCase):

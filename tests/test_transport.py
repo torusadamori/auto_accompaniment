@@ -1,14 +1,17 @@
 import asyncio
 import contextlib
 import socket
+import signal
 import tempfile
 import threading
 import time
 import unittest
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 from pathlib import Path
 
 from experiments.m3_app.python.led_relay import LedRelay
-from m3.receiver import RESET, LedConnection, consume, native_event
+from m3.receiver import LedConnection, consume, run
 
 
 class RelayTests(unittest.TestCase):
@@ -71,21 +74,8 @@ class RelayTests(unittest.TestCase):
         self.command(b'1\n')
         with socket.create_connection(self.relay.listener.getsockname(), timeout=1) as second:
             self.relay.step()
-            second.sendall(b'0\n')
-            self.relay.step()
             self.assertEqual(second.recv(1), b'')
         self.assertTrue(self.calls[-1])
-
-    def test_probe_can_run_beside_output_owner(self):
-        self.command(b'1\n')
-        self.assertEqual(self.client.recv(3), b'OK\n')
-        with socket.create_connection(self.relay.listener.getsockname(), timeout=1) as observer:
-            self.relay.step()
-            observer.sendall(b'PROBE\n')
-            self.relay.step()
-            self.assertEqual(observer.recv(3), b'OK\n')
-        self.assertTrue(self.calls[-1])
-        self.assertIsNotNone(self.relay.client)
 
     def test_ping_checks_relay_without_taking_output_ownership(self):
         self.command(b'PING\n')
@@ -154,7 +144,8 @@ class ConsumerTests(unittest.IsolatedAsyncioTestCase):
             led = LedConnection(reader, writer)
             await led.set(False)
             queue = asyncio.Queue()
-            for packet in ('90 3c 50', '90 40 50', '80 3c 00', '90 40 00'):
+            for packet in ('80 80 90 3c 50 81 40 50',
+                           '80 80 80 3c 00', '80 80 90 40 00'):
                 queue.put_nowait((time.monotonic(), bytes.fromhex(packet)))
             task = asyncio.create_task(consume(queue, led))
             async with asyncio.timeout(3):
@@ -175,30 +166,18 @@ class ConsumerTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.to_thread(thread.join, 2)
             relay.close()
 
-    async def test_malformed_native_message_fails_session(self):
+    async def test_malformed_and_stale_packet_fail_session(self):
         class FakeLed:
             async def set(self, state):
                 raise AssertionError('Should not output a partial malformed packet')
-        queue = asyncio.Queue()
-        queue.put_nowait((time.monotonic(), bytes.fromhex('90 3c')))
-        with self.assertRaises(ValueError):
-            await consume(queue, FakeLed())
-
-    async def test_disconnect_marker_clears_active_notes(self):
-        calls = []
-        class Finished(Exception):
-            pass
-        class FakeLed:
-            async def set(self, state):
-                calls.append(state)
-                if calls == [True, False]:
-                    raise Finished()
-        queue = asyncio.Queue()
-        queue.put_nowait((time.monotonic(), bytes.fromhex('90 3c 50')))
-        queue.put_nowait((time.monotonic(), RESET))
-        with self.assertRaises(Finished):
-            await consume(queue, FakeLed())
-        self.assertEqual(calls, [True, False])
+        for received, data, error in (
+            (time.monotonic(), '80 80 90 3c 50 81 80 3c', ValueError),
+            (time.monotonic() - 2, '80 80 90 3c 50', RuntimeError),
+        ):
+            queue = asyncio.Queue()
+            queue.put_nowait((received, bytes.fromhex(data)))
+            with self.assertRaises(error):
+                await consume(queue, FakeLed())
 
     async def test_idle_heartbeat_keeps_current_state(self):
         calls = []
@@ -210,7 +189,7 @@ class ConsumerTests(unittest.IsolatedAsyncioTestCase):
                 if len(calls) == 2:
                     raise Finished()
         queue = asyncio.Queue()
-        queue.put_nowait((time.monotonic(), bytes.fromhex('90 3c 50')))
+        queue.put_nowait((time.monotonic(), bytes.fromhex('80 80 90 3c 50')))
         with self.assertRaises(Finished):
             await asyncio.wait_for(consume(queue, FakeLed()), 2)
         self.assertEqual(calls, [True, True])
@@ -226,9 +205,140 @@ class ConsumerTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ConnectionError):
             await LedConnection(reader, Writer()).set(True)
 
-    def test_native_event_conversion(self):
-        event = native_event(bytes.fromhex('91 40 7f'))
-        self.assertEqual((event.status, event.data), (0x91, (0x40, 0x7f)))
+
+class SessionTests(unittest.IsolatedAsyncioTestCase):
+    async def exercise(self, mode):
+        calls = []
+        final_off = asyncio.Event()
+        peer_callback = None
+        signal_handlers = {}
+
+        def install_signal(signum, callback, *args):
+            signal_handlers[signum] = lambda: callback(*args)
+
+        class FakeLed:
+            async def set(self, state):
+                calls.append(state)
+                if state:
+                    if mode == 'relay-error':
+                        raise ConnectionError('relay ACK lost')
+                    peer_callback(None)
+                if not state and len(calls) > 1:
+                    final_off.set()
+
+        class FakeClient:
+            def __init__(self, address, disconnected_callback):
+                nonlocal peer_callback
+                peer_callback = disconnected_callback
+                characteristic = SimpleNamespace(properties=['notify'])
+                service = SimpleNamespace(get_characteristic=lambda _: characteristic)
+                self.services = SimpleNamespace(get_service=lambda _: None if mode == 'missing-service' else service)
+
+            async def __aenter__(self):
+                if mode == 'connect-error':
+                    raise RuntimeError('connect failed')
+                return self
+
+            async def __aexit__(self, *args):
+                peer_callback(None)  # Local cleanup also fires the callback.
+                # An OFF must not depend on slow BLE teardown completing.
+                try:
+                    await final_off.wait()
+                except asyncio.CancelledError:
+                    await final_off.wait()
+
+            async def read_gatt_char(self, _):
+                raise AssertionError('Notify must not depend on a GATT read')
+
+            async def start_notify(self, _, callback):
+                if mode == 'early-disconnect':
+                    peer_callback(None)
+                    await asyncio.Event().wait()
+                if mode == 'signal':
+                    signal_handlers[signal.SIGTERM]()
+                    return
+                if mode == 'notify-error':
+                    raise RuntimeError('start_notify failed')
+                if mode == 'overflow':
+                    for _ in range(257):
+                        callback(None, bytes.fromhex('80 80 f8'))
+                elif mode == 'malformed':
+                    callback(None, bytes.fromhex('80 80 90 3c'))
+                else:
+                    callback(None, bytes.fromhex('80 80 90 3c 50'))
+
+        writer = SimpleNamespace(close=lambda: None, wait_closed=AsyncMock())
+        args = SimpleNamespace(scan=False, socket='fake.sock', port=None,
+                               address='fake-phone', raw=False)
+        loop = asyncio.get_running_loop()
+        with patch.dict('sys.modules', {'bleak': SimpleNamespace(BleakClient=FakeClient, BleakScanner=None)}), \
+             patch.object(loop, 'add_signal_handler', side_effect=install_signal), \
+             patch.object(loop, 'remove_signal_handler'), \
+             self.assertLogs('m3', level='INFO') as logs, \
+             patch('m3.receiver.asyncio.open_unix_connection', create=True,
+                   new=AsyncMock(return_value=(None, writer))), \
+             patch('m3.receiver.LedConnection', return_value=FakeLed()):
+            if mode in ('disconnect', 'early-disconnect', 'signal'):
+                await asyncio.wait_for(run(args), 2)
+                self.assertEqual(calls, [False, True, False] if mode == 'disconnect' else [False, False])
+            else:
+                error = (ValueError if mode == 'malformed' else
+                         ConnectionError if mode == 'relay-error' else RuntimeError)
+                with self.assertRaises(error):
+                    await asyncio.wait_for(run(args), 2)
+                self.assertFalse(calls[-1])
+            self.assertTrue(final_off.is_set())
+            output = '\n'.join(logs.output)
+            self.assertIn('Session ended:', output)
+            if mode == 'disconnect':
+                self.assertIn('BLE MIDI subscribed:', output)
+                self.assertIn('Session ended: BLE disconnected during receiving', output)
+            elif mode == 'early-disconnect':
+                self.assertIn('Session ended: BLE disconnected during notify subscription', output)
+            elif mode == 'signal':
+                self.assertIn('Session ended: signal SIGTERM', output)
+                self.assertNotIn('Stop requested: BLE disconnected', output)
+            elif mode == 'relay-error':
+                self.assertIn('Session ended: MIDI/relay worker failed: ConnectionError: relay ACK lost', output)
+            elif mode == 'notify-error':
+                self.assertIn('Session ended: BLE notify subscription failed: RuntimeError: start_notify failed', output)
+                self.assertNotIn('Stop requested: BLE disconnected', output)
+            elif mode == 'missing-service':
+                self.assertIn('BLE service validation failed', output)
+                self.assertNotIn('BLE starting notify:', output)
+            elif mode == 'connect-error':
+                self.assertIn('BLE connecting failed: RuntimeError: connect failed', output)
+            elif mode == 'overflow':
+                self.assertIn('Session ended: BLE queue failed:', output)
+            elif mode == 'malformed':
+                self.assertIn('Session ended: MIDI/relay worker failed:', output)
+
+    async def test_disconnect_sends_off_before_ble_cleanup(self):
+        await self.exercise('disconnect')
+
+    async def test_notify_error_survives_disconnect_callback_and_slow_cleanup(self):
+        await self.exercise('notify-error')
+
+    async def test_service_error_is_logged_before_cleanup(self):
+        await self.exercise('missing-service')
+
+    async def test_disconnect_before_notify_completes_is_logged(self):
+        await self.exercise('early-disconnect')
+
+    async def test_signal_reason_survives_cleanup_callback(self):
+        await self.exercise('signal')
+
+    async def test_relay_error_reason_survives_cleanup_callback(self):
+        await self.exercise('relay-error')
+
+    async def test_connection_error_is_logged(self):
+        await self.exercise('connect-error')
+
+    async def test_overflow_stops_session_and_sends_off(self):
+        await self.exercise('overflow')
+
+    async def test_parser_error_stops_session_and_sends_off(self):
+        await self.exercise('malformed')
 
 
 if __name__ == '__main__':

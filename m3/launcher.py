@@ -108,8 +108,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--app-dir', type=Path, default=Path(os.environ.get('M3_APP_DIR', DEFAULT_APP)))
     parser.add_argument('--socket', type=Path, help='Default: APP_DIR/m3-led.sock')
-    parser.add_argument('--port-pattern', default=os.environ.get(
-        'UNOQ_MIDI_PORT_PATTERN', '(?i)(bluez|ble[ -]?midi|toru1)'))
+    parser.add_argument('--address', default=os.environ.get('M3_BLE_ADDRESS', '9C:C3:94:81:01:53'))
     parser.add_argument('--wait-seconds', type=float, default=120)
     parser.add_argument('--raw', action='store_true', help='Log raw BLE packets')
     parser.add_argument('--dry-run', action='store_true', help='Inspect only; no pull, copy, socket connect or BLE')
@@ -136,8 +135,7 @@ def main(argv=None):
         print(f'M3: {"backup + update" if old is not None else "create"}: {destination}', flush=True)
     if not plan:
         print('M3: App files already match; no copy or restart needed', flush=True)
-    receiver_args = [sys.executable, '-B', '-m', 'm3.receiver', '--socket', str(path),
-                     '--port-pattern', args.port_pattern]
+    receiver_args = [sys.executable, '-B', '-m', 'm3.receiver', '--address', args.address, '--socket', str(path)]
     if args.raw:
         receiver_args.append('--raw')
     if args.dry_run:
@@ -150,16 +148,16 @@ def main(argv=None):
                            'Existing socket/files were not changed.')
     from importlib.metadata import version, PackageNotFoundError
     try:
-        installed = version('python-rtmidi')
+        installed = version('bleak')
     except PackageNotFoundError as error:
-        raise RuntimeError(f'python-rtmidi missing. Run {sys.executable} -m pip install -r m3/requirements.txt') from error
+        raise RuntimeError(f'Bleak missing. Run {sys.executable} -m pip install -r m3/requirements.txt') from error
     if sys.version_info < (3, 11):
         raise RuntimeError('Python 3.11+ required in ~/blemidi')
-    if installed != '1.5.8':
-        raise RuntimeError(f'Expected python-rtmidi==1.5.8, found {installed}; see m3/requirements.txt')
+    if installed != '3.0.2':
+        raise RuntimeError(f'Expected tested bleak==3.0.2, found {installed}; see m3/requirements.txt')
     sync_files(app, plan)
     wait_for_socket(path, args.wait_seconds)
-    print('M3: starting local MIDI-to-LED. Connect MIDI Wrench to toru1; Ctrl+C stops.\n'
+    print('M3: starting BLE-to-LED. Keep the iPhone MIDI app ready; Ctrl+C stops.\n'
           'M3: if connection is refused, Run M3 in App Lab and check for a stale socket.', flush=True)
     os.chdir(REPO)
     os.execv(sys.executable, receiver_args)

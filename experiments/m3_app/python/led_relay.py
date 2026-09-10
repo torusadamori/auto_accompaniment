@@ -14,7 +14,6 @@ class LedRelay:
         self.set_led = set_led
         self.idle_timeout = idle_timeout
         self.client = None
-        self.observers = {}
         self.client_controls_output = False
         self.pending = bytearray()
         self.last_command = 0
@@ -57,47 +56,17 @@ class LedRelay:
         if self.client and time.monotonic() - self.last_command > self.idle_timeout:
             LOG.warning("Host heartbeat expired")
             self.disconnect()
-        sockets = [self.listener] + ([self.client] if self.client else []) + list(self.observers)
+        sockets = [self.listener] + ([self.client] if self.client else [])
         ready, _, _ = select.select(sockets, [], [], 0.1)
         if self.listener in ready:
             newcomer, _ = self.listener.accept()
             if self.client:
-                # A concurrent doctor/PING connection may observe health but can
-                # never become output owner or affect the owner's heartbeat.
-                newcomer.setblocking(False)
-                self.observers[newcomer] = bytearray()
+                newcomer.close()  # Do not let a second receiver reset the owner.
             else:
                 self.client = newcomer
                 self.client_controls_output = False
                 self.client.settimeout(1)
                 self.last_command = time.monotonic()
-        for observer in set(ready) & self.observers.keys():
-            try:
-                data = observer.recv(64)
-                pending = self.observers[observer]
-                pending.extend(data)
-                if b"\n" not in pending:
-                    if len(pending) <= 6 and data:
-                        continue
-                    raise ValueError("Invalid diagnostic request")
-                frame = bytes(pending).partition(b"\n")[0]
-                if frame == b"PING":
-                    observer.sendall(b"OK\n")
-                elif frame == b"PROBE":
-                    self.set_led(bool(self.state))
-                    observer.sendall(b"OK\n")
-                else:
-                    raise ValueError("Second connection may only PING or PROBE")
-            except (BlockingIOError, InterruptedError):
-                continue
-            except (OSError, ValueError):
-                LOG.debug("Diagnostic relay client closed", exc_info=True)
-                observer.close()
-                del self.observers[observer]
-            finally:
-                if observer in self.observers and b"\n" in self.observers[observer]:
-                    observer.close()
-                    del self.observers[observer]
         if self.client not in ready:
             return
         try:
@@ -137,9 +106,6 @@ class LedRelay:
     def close(self):
         try:
             self.disconnect()
-            for observer in self.observers:
-                observer.close()
-            self.observers.clear()
         finally:
             self.listener.close()
             if self.unix_path:
