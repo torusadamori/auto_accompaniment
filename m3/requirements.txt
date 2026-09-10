@@ -1,0 +1,2 @@
+# Version already used successfully on the UNO Q host; not for App Lab.
+bleak==3.0.2
