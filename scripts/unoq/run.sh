@@ -35,8 +35,8 @@ run_workflow() {
         "$UNOQ_REPO_ROOT" "$(git rev-parse --short HEAD)" "$log_file"
     unoq_require_venv || return
     "$UNOQ_VENV_PYTHON" -c \
-        'import sys, bleak; assert sys.version_info >= (3, 11); print("UNOQ run: Python/Bleak dependency check PASS")' || {
-        unoq_die "Python 3.11+ and Bleak are required; run setup.sh"
+        'import sys, rtmidi; assert sys.version_info >= (3, 11); print("UNOQ run: Python/RtMidi dependency check PASS")' || {
+        unoq_die "Python 3.11+ and python-rtmidi are required; run setup.sh"
         return
     }
     if [[ "$do_update" == 1 ]]; then
@@ -51,13 +51,17 @@ run_workflow() {
     [[ "$sync_existing" == 1 ]] && deploy_args+=(--sync-existing)
     "$UNOQ_REPO_ROOT/scripts/unoq/deploy.sh" "${deploy_args[@]}" || return
     if [[ "$dry_run" == 1 ]]; then
-        printf 'UNOQ run: dry-run: would ensure App, wait up to %ss, then start BLE receiver\n' \
+        printf 'UNOQ run: dry-run: would ensure App, wait up to %ss, then receive local MIDI\n' \
             "${UNOQ_WAIT_SECONDS:-120}"
         return 0
     fi
     if [[ ( -e "$UNOQ_RELAY_SOCKET" || -L "$UNOQ_RELAY_SOCKET" ) && ! -S "$UNOQ_RELAY_SOCKET" ]]; then
         unoq_die "relay path is not a Unix socket and was preserved: $UNOQ_RELAY_SOCKET"
         return
+    fi
+    if [[ -S "$UNOQ_RELAY_SOCKET" ]]; then
+        "$UNOQ_VENV_PYTHON" -B -m unoq.runtime --cleanup-stale \
+            --app-dir "$UNOQ_APP_DIR" --socket "$UNOQ_RELAY_SOCKET" || return
     fi
     if [[ ! -S "$UNOQ_RELAY_SOCKET" ]]; then
         case "${UNOQ_APP_START_MODE:-cli}" in
@@ -87,10 +91,10 @@ run_workflow() {
         unoq_die "relay socket is not accessible by this user: $UNOQ_RELAY_SOCKET"
         return
     }
-    receiver_args=(--address "$UNOQ_BLE_ADDRESS" --socket "$UNOQ_RELAY_SOCKET")
+    receiver_args=(--socket "$UNOQ_RELAY_SOCKET" --port-pattern "$UNOQ_MIDI_PORT_PATTERN"
+                   --retry-seconds "$UNOQ_MIDI_RETRY_SECONDS")
     [[ "$raw" == 1 ]] && receiver_args+=(--raw)
-    export UNOQ_BLE_MIDI_SERVICE_UUID UNOQ_BLE_MIDI_CHARACTERISTIC_UUID
-    printf 'UNOQ run: starting BLE receiver for %s (Ctrl+C to stop)\n' "$UNOQ_BLE_ADDRESS"
+    printf 'UNOQ run: receiving local Linux MIDI matching %s (Ctrl+C to stop)\n' "$UNOQ_MIDI_PORT_PATTERN"
     "$UNOQ_VENV_PYTHON" -B -m "$UNOQ_RECEIVER_MODULE" "${receiver_args[@]}"
 }
 

@@ -9,8 +9,6 @@ exec "$UNOQ_VENV_PYTHON" -B -m unoq.doctor \
     --venv "$UNOQ_VENV_DIR" \
     --app-dir "$UNOQ_APP_DIR" \
     --socket "$UNOQ_RELAY_SOCKET" \
-    --address "$UNOQ_BLE_ADDRESS" \
-    --service-uuid "$UNOQ_BLE_MIDI_SERVICE_UUID" \
-    --characteristic-uuid "$UNOQ_BLE_MIDI_CHARACTERISTIC_UUID" \
-    --ble-timeout "${UNOQ_BLE_PROBE_SECONDS:-10}" \
+    --port-pattern "$UNOQ_MIDI_PORT_PATTERN" \
+    --midi-probe-seconds "${UNOQ_MIDI_PROBE_SECONDS:-1}" \
     "$@"

@@ -1,2 +1,2 @@
-# Version already used successfully on the UNO Q host; not for App Lab.
-bleak==3.0.2
+# Host-side MIDI access. BlueZ/WirePlumber or BlueALSA performs BLE-MIDI.
+python-rtmidi==1.5.8

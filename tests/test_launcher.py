@@ -129,7 +129,7 @@ class LauncherTests(unittest.TestCase):
     def test_venv_receiver_arguments_and_no_copy_when_current(self):
         for relative in launcher.FILES:
             self.put_old(relative, (launcher.REPO / 'experiments/m3_app' / relative).read_bytes())
-        with patch('importlib.metadata.version', return_value='3.0.2'), \
+        with patch('importlib.metadata.version', return_value='1.5.8'), \
              patch('m3.launcher.wait_for_socket') as wait, \
              patch('m3.launcher.os.chdir'), \
              patch('m3.launcher.os.execv') as execute, \
@@ -138,7 +138,8 @@ class LauncherTests(unittest.TestCase):
         args = execute.call_args.args[1]
         self.assertEqual(args[0], launcher.sys.executable)
         self.assertEqual(args[2:4], ['-m', 'm3.receiver'])
-        self.assertIn('9C:C3:94:81:01:53', args)
+        self.assertNotIn('9C:C3:94:81:01:53', args)
+        self.assertIn('(?i)(bluez|ble[ -]?midi|toru1)', args)
         self.assertIn(str(self.app / 'm3-led.sock'), args)
         self.assertEqual(args[-1], '--raw')
         wait.assert_called_once()
