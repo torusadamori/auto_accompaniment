@@ -4,13 +4,16 @@ import argparse
 import asyncio
 import contextlib
 import logging
+import os
 import signal
 import time
 
 from .midi import ActiveNotes, BleMidiParser
 
-SERVICE = "03b80e5a-ede8-4b33-a751-6ce34ec4c700"
-CHARACTERISTIC = "7772e5db-3868-4112-a1a9-f2669d106bf3"
+SERVICE = os.environ.get("UNOQ_BLE_MIDI_SERVICE_UUID", "03b80e5a-ede8-4b33-a751-6ce34ec4c700")
+CHARACTERISTIC = os.environ.get(
+    "UNOQ_BLE_MIDI_CHARACTERISTIC_UUID", "7772e5db-3868-4112-a1a9-f2669d106bf3"
+)
 LOG = logging.getLogger("m3")
 
 

@@ -115,19 +115,20 @@ Loopian_RustはMIT Licenseです。コードを直接再利用する場合は、
 - [Concept Review](docs/CONCEPT_REVIEW.md) — Claude等に設計レビューを依頼するための文書
 - [Development Specification](docs/DEVELOPMENT_SPEC.md) — 実装仕様、時間モデル、モジュール構成、マイルストーン
 - [M3 BLE to MCU LED](docs/M3_BLE_TO_MCU.md) — ホストBLE受信から内蔵LEDまでの最小統合テスト
+- [UNO Q Development](docs/UNOQ_DEVELOPMENT.md) — setup/update/deploy/run/doctorをまとめたUNO Q開発基盤
 - [CLAUDE.md](CLAUDE.md) — Claude Code向けプロジェクト指示
 
-## UNO QでM3をワンコマンド実行
+## UNO Q開発
 
-UNO Qホストのこのrepo rootで実行します。初めてスクリプトを取得するときだけ `git pull --ff-only` が必要です。
+UNO Qホストのrepo rootで、初回はsetup、通常はrun、異常時はdoctorだけを使います。
 
 ```bash
-./scripts/m3_run_unoq.sh
+./scripts/unoq/setup.sh
+./scripts/unoq/run.sh
+./scripts/unoq/doctor.sh
 ```
 
-`~/blemidi/bin/python` を直接使うため `source` は不要です。App側の同期とsocket確認を行い、未起動なら「App LabでM3 BLE to LEDをRunしてください」と表示して最大120秒待ち、そのままBLE受信を開始します。
-
-更新も行う場合は `./scripts/m3_run_unoq.sh --pull`、変更せず確認する場合は `./scripts/m3_run_unoq.sh --dry-run`。独自編集の保護・バックアップ付き同期・環境変更は [M3手順書](docs/M3_BLE_TO_MCU.md#ワンコマンド起動推奨) を参照してください。
+venv作成、requirements、Git更新、手編集保護付きApp同期、公式App CLI起動、relay待機、BLE receiver、ログを一つの基盤にまとめています。設定と安全境界は [UNO Q開発手順](docs/UNOQ_DEVELOPMENT.md) を参照してください。従来の `scripts/m3_run_unoq.sh` は互換用に残しています。
 
 ## ローカル開発パス
 

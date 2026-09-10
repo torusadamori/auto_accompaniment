@@ -77,6 +77,21 @@ class RelayTests(unittest.TestCase):
             self.assertEqual(second.recv(1), b'')
         self.assertTrue(self.calls[-1])
 
+    def test_ping_checks_relay_without_taking_output_ownership(self):
+        self.command(b'PING\n')
+        self.assertEqual(self.client.recv(16), b'OK\n')
+        self.client.close()
+        self.relay.step()
+        self.assertEqual(self.calls, [False])
+
+    def test_probe_calls_bridge_without_changing_state_or_ownership(self):
+        self.command(b'PROBE\n')
+        self.assertEqual(self.client.recv(16), b'OK\n')
+        self.assertEqual(self.calls, [False, False])
+        self.client.close()
+        self.relay.step()
+        self.assertEqual(self.calls, [False, False])
+
     def test_rpc_failure_never_acknowledges_on(self):
         def fail_on(state):
             self.calls.append(state)

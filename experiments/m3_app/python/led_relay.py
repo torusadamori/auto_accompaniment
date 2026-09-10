@@ -14,6 +14,7 @@ class LedRelay:
         self.set_led = set_led
         self.idle_timeout = idle_timeout
         self.client = None
+        self.client_controls_output = False
         self.pending = bytearray()
         self.last_command = 0
         self.state = None
@@ -37,13 +38,16 @@ class LedRelay:
             LOG.info("LED %s (Bridge acknowledged)", "ON" if state else "OFF")
 
     def disconnect(self):
+        controlled_output = self.client_controls_output
         if self.client:
             self.client.close()
             self.client = None
+        self.client_controls_output = False
         self.pending.clear()
-        # Force an OFF RPC even after an ON call with an uncertain result.
-        self.state = None
-        self._set(False)
+        if controlled_output:
+            # Force an OFF RPC even after an ON call with an uncertain result.
+            self.state = None
+            self._set(False)
 
     def step(self):
         if self.state is None:
@@ -60,6 +64,7 @@ class LedRelay:
                 newcomer.close()  # Do not let a second receiver reset the owner.
             else:
                 self.client = newcomer
+                self.client_controls_output = False
                 self.client.settimeout(1)
                 self.last_command = time.monotonic()
         if self.client not in ready:
@@ -73,12 +78,23 @@ class LedRelay:
             while b"\n" in self.pending:
                 frame, _, rest = self.pending.partition(b"\n")
                 self.pending[:] = rest
+                if frame == b"PING":
+                    self.last_command = time.monotonic()
+                    self.client.sendall(b"OK\n")
+                    continue
+                if frame == b"PROBE":
+                    # Exercise the real Bridge RPC without changing logical state.
+                    self.set_led(bool(self.state))
+                    self.last_command = time.monotonic()
+                    self.client.sendall(b"OK\n")
+                    continue
                 if frame not in (b"0", b"1"):
-                    raise ValueError("Expected 0 or 1 followed by LF")
+                    raise ValueError("Expected PING, PROBE, 0 or 1 followed by LF")
+                self.client_controls_output = True
                 self._set(frame == b"1")
                 self.last_command = time.monotonic()
                 self.client.sendall(b"OK\n")
-            if len(self.pending) > 1:
+            if len(self.pending) > 5:
                 raise ValueError("Oversized command")
         except (OSError, ValueError):
             LOG.exception("Relay client failed")

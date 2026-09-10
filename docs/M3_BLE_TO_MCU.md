@@ -58,7 +58,7 @@ BLEは成功済みのホストvenvで受信する。ArduinoライブラリはApp
 5. `/home/arduino/ArduinoApps/m3-ble-to-led/m3-led.sock` を確認する。まだ無ければ **「App LabでM3 BLE to LEDをRunしてください」** と表示して最大120秒待つ。Runすると同じコマンドが続行する。タイムアウトなら理由付きで終了し、Run後に同じコマンドを再実行する。
 6. 同じvenv Pythonで `m3.receiver` を起動し、`9C:C3:94:81:01:53` からのnotifyを待つ。終了はCtrl+C。
 
-App Lab 0.10.0の実機で安全に起動できるCLI経路は、このrepo・現在アクセス可能な環境では確認できていない。そのためCLI/Dockerによる起動やMCU書き込みの推測実装はせず、App LabのRun操作だけを残す。iPhone側はこれまで同様、MIDIアプリを送信可能な状態にする。
+この旧M3 launcherを作成した時点では、App Lab 0.10.0実機のCLI起動経路を確認できていなかったため、GUIのRun操作を残している。その後、Arduino公式 `arduino-app-cli` の安定版と `app start app_path` / `app stop app_path` の実装を確認し、新しい [`scripts/unoq/` 基盤](UNOQ_DEVELOPMENT.md) では公式CLIによる起動・必要時停止を使用する。通常運用は新基盤を使い、この旧launcherは互換用とする。非公式Docker操作やMCU書込手順は引き続き推測実装しない。
 
 ### ファイル保護
 
