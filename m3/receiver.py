@@ -73,47 +73,108 @@ async def run(args):
     led = LedConnection(reader, writer)
     queue = asyncio.Queue(maxsize=256)
     stopped = asyncio.Event()
-    overflow = False
     tasks = []
     loop = asyncio.get_running_loop()
+    stop_reason = None
+    failure = None
+    phase = "connecting"
+    tearing_down = False
+    installed_signals = []
+
+    def request_stop(reason):
+        nonlocal stop_reason
+        if stop_reason is None:
+            stop_reason = reason
+            LOG.info("Stop requested: %s", reason)
+        stopped.set()
+
+    def record_failure(source, error):
+        nonlocal failure
+        if failure is None:
+            failure = (source, error)
+            LOG.error("%s failed: %s: %s", source, type(error).__name__, error,
+                      exc_info=True)
+        request_stop(f"{source} failed: {type(error).__name__}: {error}")
+
+    def disconnected(_client):
+        if tearing_down:
+            LOG.debug("BLE disconnected during local cleanup")
+        else:
+            request_stop(f"BLE disconnected during {phase}")
 
     def notification(_characteristic, data):
-        nonlocal overflow
         if stopped.is_set():
             return
         try:
             queue.put_nowait((time.monotonic(), bytes(data)))
         except asyncio.QueueFull:
-            overflow = True
-            stopped.set()
+            record_failure("BLE queue", RuntimeError("BLE queue overflow; session stopped"))
 
-    for signum in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(signum, stopped.set)
+    async def worker():
+        try:
+            await consume(queue, led, args.raw)
+        except Exception as error:
+            record_failure("MIDI/relay worker", error)
+            raise
+
+    async def receive():
+        nonlocal phase, tearing_down
+        try:
+            LOG.info("BLE connecting: %s", args.address)
+            async with BleakClient(args.address, disconnected_callback=disconnected) as client:
+                try:
+                    phase = "service validation"
+                    LOG.info("BLE connected; validating MIDI service")
+                    service = client.services.get_service(SERVICE)
+                    characteristic = service.get_characteristic(CHARACTERISTIC) if service else None
+                    if characteristic is None or "notify" not in characteristic.properties:
+                        raise RuntimeError("Peer does not expose BLE MIDI notifications")
+                    phase = "notify subscription"
+                    LOG.info("BLE starting notify: %s", CHARACTERISTIC)
+                    # Prefer the successfully tested notify reception path. Do not
+                    # gate it on a separate GATT read of the MIDI stream.
+                    await client.start_notify(characteristic, notification)
+                    phase = "receiving"
+                    LOG.info("BLE MIDI subscribed: %s", args.address)
+                    await stopped.wait()
+                except Exception as error:
+                    # Capture BEFORE __aexit__: disconnect callbacks/slow cleanup
+                    # must not hide the original service/start_notify exception.
+                    record_failure(f"BLE {phase}", error)
+                    raise
+                finally:
+                    tearing_down = True
+        except Exception as error:
+            record_failure(f"BLE {phase}", error)
+            raise
+
     try:
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(signum, request_stop, f"signal {signum.name}")
+            installed_signals.append(signum)
+        LOG.info("Relay connected; requesting initial LED OFF")
         await led.set(False)
-        # Also sends OFF heartbeats while connecting/subscribing to BLE.
-        worker = asyncio.create_task(consume(queue, led, args.raw))
-        tasks.append(worker)
-
-        async def receive():
-            async with BleakClient(args.address, disconnected_callback=lambda _: stopped.set()) as client:
-                service = client.services.get_service(SERVICE)
-                characteristic = service.get_characteristic(CHARACTERISTIC) if service else None
-                if characteristic is None or "notify" not in characteristic.properties:
-                    raise RuntimeError("Peer does not expose BLE MIDI notifications")
-                await client.read_gatt_char(characteristic)
-                await client.start_notify(characteristic, notification)
-                LOG.info("BLE MIDI subscribed: %s", args.address)
-                await stopped.wait()
-
-        tasks.extend([asyncio.create_task(receive()), asyncio.create_task(stopped.wait())])
+        # Heartbeats continue while connecting/subscribing to BLE.
+        tasks = [asyncio.create_task(worker(), name="midi-relay"),
+                 asyncio.create_task(receive(), name="ble-receiver"),
+                 asyncio.create_task(stopped.wait(), name="stop-waiter")]
         done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        LOG.info("Session wakeup: %s", ", ".join(sorted(t.get_name() for t in done)))
+        if failure is not None:
+            raise failure[1]
         for task in done:
             task.result()
-        if overflow:
-            raise RuntimeError("BLE queue overflow; session stopped")
+        if stop_reason is None:
+            raise RuntimeError("Session task completed without a stop reason")
+    except asyncio.CancelledError:
+        request_stop("receiver task cancelled")
+        raise
+    except Exception as error:
+        record_failure("session", error)
+        raise
     finally:
-        stopped.set()
+        tearing_down = True
+        request_stop(stop_reason or "session cleanup")
         for task in tasks:
             task.cancel()
         # Stop output first; BLE disconnect cleanup may itself be slow.
@@ -121,13 +182,24 @@ async def run(args):
             await asyncio.gather(tasks[0], return_exceptions=True)
         try:
             await led.set(False)
-        except Exception:
-            LOG.exception("Final LED OFF not acknowledged; check App Lab / MCU")
+        except Exception as error:
+            record_failure("Final LED OFF (check App Lab / MCU)", error)
         writer.close()
         with contextlib.suppress(Exception):
             await asyncio.wait_for(writer.wait_closed(), 2)
-        await asyncio.gather(*tasks, return_exceptions=True)
-        LOG.info("Session ended; restart receiver to reconnect with empty active notes")
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # Retain failures that arrive during teardown as well.
+        for task, result in zip(tasks, results):
+            if isinstance(result, Exception):
+                LOG.debug("Task %s ended with %r", task.get_name(), result)
+        for signum in installed_signals:
+            loop.remove_signal_handler(signum)
+        reason = (f"{failure[0]} failed: {type(failure[1]).__name__}: {failure[1]}"
+                  if failure else stop_reason)
+        LOG.info("Session ended: %s; restart receiver to reconnect with empty active notes", reason)
+    if failure is not None:
+        # A failure first observed during cleanup must also produce a nonzero exit.
+        raise failure[1]
 
 
 def main():

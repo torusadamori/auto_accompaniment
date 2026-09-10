@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import socket
+import signal
 import tempfile
 import threading
 import time
@@ -195,11 +196,17 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         calls = []
         final_off = asyncio.Event()
         peer_callback = None
+        signal_handlers = {}
+
+        def install_signal(signum, callback, *args):
+            signal_handlers[signum] = lambda: callback(*args)
 
         class FakeLed:
             async def set(self, state):
                 calls.append(state)
                 if state:
+                    if mode == 'relay-error':
+                        raise ConnectionError('relay ACK lost')
                     peer_callback(None)
                 if not state and len(calls) > 1:
                     final_off.set()
@@ -210,12 +217,15 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                 peer_callback = disconnected_callback
                 characteristic = SimpleNamespace(properties=['notify'])
                 service = SimpleNamespace(get_characteristic=lambda _: characteristic)
-                self.services = SimpleNamespace(get_service=lambda _: service)
+                self.services = SimpleNamespace(get_service=lambda _: None if mode == 'missing-service' else service)
 
             async def __aenter__(self):
+                if mode == 'connect-error':
+                    raise RuntimeError('connect failed')
                 return self
 
             async def __aexit__(self, *args):
+                peer_callback(None)  # Local cleanup also fires the callback.
                 # An OFF must not depend on slow BLE teardown completing.
                 try:
                     await final_off.wait()
@@ -223,9 +233,17 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                     await final_off.wait()
 
             async def read_gatt_char(self, _):
-                return b''
+                raise AssertionError('Notify must not depend on a GATT read')
 
             async def start_notify(self, _, callback):
+                if mode == 'early-disconnect':
+                    peer_callback(None)
+                    await asyncio.Event().wait()
+                if mode == 'signal':
+                    signal_handlers[signal.SIGTERM]()
+                    return
+                if mode == 'notify-error':
+                    raise RuntimeError('start_notify failed')
                 if mode == 'overflow':
                     for _ in range(257):
                         callback(None, bytes.fromhex('80 80 f8'))
@@ -239,22 +257,67 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                                address='fake-phone', raw=False)
         loop = asyncio.get_running_loop()
         with patch.dict('sys.modules', {'bleak': SimpleNamespace(BleakClient=FakeClient, BleakScanner=None)}), \
-             patch.object(loop, 'add_signal_handler'), \
+             patch.object(loop, 'add_signal_handler', side_effect=install_signal), \
+             patch.object(loop, 'remove_signal_handler'), \
+             self.assertLogs('m3', level='INFO') as logs, \
              patch('m3.receiver.asyncio.open_unix_connection', create=True,
                    new=AsyncMock(return_value=(None, writer))), \
              patch('m3.receiver.LedConnection', return_value=FakeLed()):
-            if mode == 'disconnect':
+            if mode in ('disconnect', 'early-disconnect', 'signal'):
                 await asyncio.wait_for(run(args), 2)
-                self.assertEqual(calls, [False, True, False])
+                self.assertEqual(calls, [False, True, False] if mode == 'disconnect' else [False, False])
             else:
-                error = RuntimeError if mode == 'overflow' else ValueError
+                error = (ValueError if mode == 'malformed' else
+                         ConnectionError if mode == 'relay-error' else RuntimeError)
                 with self.assertRaises(error):
                     await asyncio.wait_for(run(args), 2)
                 self.assertFalse(calls[-1])
             self.assertTrue(final_off.is_set())
+            output = '\n'.join(logs.output)
+            self.assertIn('Session ended:', output)
+            if mode == 'disconnect':
+                self.assertIn('BLE MIDI subscribed:', output)
+                self.assertIn('Session ended: BLE disconnected during receiving', output)
+            elif mode == 'early-disconnect':
+                self.assertIn('Session ended: BLE disconnected during notify subscription', output)
+            elif mode == 'signal':
+                self.assertIn('Session ended: signal SIGTERM', output)
+                self.assertNotIn('Stop requested: BLE disconnected', output)
+            elif mode == 'relay-error':
+                self.assertIn('Session ended: MIDI/relay worker failed: ConnectionError: relay ACK lost', output)
+            elif mode == 'notify-error':
+                self.assertIn('Session ended: BLE notify subscription failed: RuntimeError: start_notify failed', output)
+                self.assertNotIn('Stop requested: BLE disconnected', output)
+            elif mode == 'missing-service':
+                self.assertIn('BLE service validation failed', output)
+                self.assertNotIn('BLE starting notify:', output)
+            elif mode == 'connect-error':
+                self.assertIn('BLE connecting failed: RuntimeError: connect failed', output)
+            elif mode == 'overflow':
+                self.assertIn('Session ended: BLE queue failed:', output)
+            elif mode == 'malformed':
+                self.assertIn('Session ended: MIDI/relay worker failed:', output)
 
     async def test_disconnect_sends_off_before_ble_cleanup(self):
         await self.exercise('disconnect')
+
+    async def test_notify_error_survives_disconnect_callback_and_slow_cleanup(self):
+        await self.exercise('notify-error')
+
+    async def test_service_error_is_logged_before_cleanup(self):
+        await self.exercise('missing-service')
+
+    async def test_disconnect_before_notify_completes_is_logged(self):
+        await self.exercise('early-disconnect')
+
+    async def test_signal_reason_survives_cleanup_callback(self):
+        await self.exercise('signal')
+
+    async def test_relay_error_reason_survives_cleanup_callback(self):
+        await self.exercise('relay-error')
+
+    async def test_connection_error_is_logged(self):
+        await self.exercise('connect-error')
 
     async def test_overflow_stops_session_and_sends_off(self):
         await self.exercise('overflow')

@@ -112,7 +112,7 @@ python -m m3.receiver --address AA:BB:CC:DD:EE:FF \
   --socket "$APP_DIR/m3-led.sock" --raw
 ```
 
-Service `03b80e5a-ede8-4b33-a751-6ce34ec4c700`、Characteristic `7772e5db-3868-4112-a1a9-f2669d106bf3` を確認し、初期read後に `start_notify()` で購読する。`BLE MIDI subscribed` が出たらiPhoneから鍵盤またはTulipを送信する。通常は `--raw` を外してよい。
+Service `03b80e5a-ede8-4b33-a751-6ce34ec4c700`、Characteristic `7772e5db-3868-4112-a1a9-f2669d106bf3` を確認し、`read_gatt_char()` を挟まず直接 `start_notify()` で購読する。`BLE MIDI subscribed` が出たらiPhoneから鍵盤またはTulipを送信する。通常は `--raw` を外してよい。
 
 ログ例（channelは1〜16）：
 
@@ -155,7 +155,7 @@ NOTE OFF ch=1 note=64 vel=0 active=0
 
 ## 検証結果（開発PC、2026-09-10）
 
-開発PCで30テストを実行し、29件成功・Unix socketの1件skip。compileallも成功。
+開発PCで36テストを実行し、35件成功・Unix socketの1件skip。compileallも成功。
 
 WindowsのPythonでパーサ・active set・TCPフレーム・EOF・期限切れ・RPC失敗・疑似Bridgeへの統合経路をテストする。Unix socketを提供しないPythonではその1件を明示的skipする。UNO QのLinux Pythonでは同じテストがUnix socketの接続・ACK・ファイル削除も検証する。
 
@@ -165,6 +165,42 @@ python -m compileall -q m3 experiments/m3_app/python tests
 ```
 
 実機のBLE購読とMCUビルド・書き込み・LED点灯はこの開発PCから実行していない。上の合格条件の実測結果を後続の実験ログへ記録すること。
+
+## 購読前終了の修正と再テスト
+
+実機から、socket→LEDは成功し、単純なBleak monitorはnotify受信できる一方、M3では初期readの正常復帰前に終了するとの報告があった。monitorのソースはリポジトリ未収録なので、行単位の比較はできていない。報告された成功経路と比較し、M3が購読前に課していたreadを除いた。
+
+Bleakの `start_notify()` APIには事前readの要件がない。一方、BLE MIDI 1.0 §5には接続時の初期readが記載されている。今回の変更はすべてのBLE MIDI機器でreadが不要との判断ではなく、既にnotify受信できているUNO Q/iPhoneのM3検証経路を優先するもの。readが失敗・中断したBlueZ/ATTレベルの原因はまだ確定していない。
+
+旧フローには別の問題もあった。`async with BleakClient(...)` 内の例外が呼び出し元へ伝わる前に `__aexit__` の切断処理が実行され、切断callbackが `stopped` を立てる。そこで `FIRST_COMPLETED` がstop waiterだけを返すと、まだ切断処理中の受信taskをcancelし、元の例外をcleanupの `gather(return_exceptions=True)` で捨てる可能性があった。
+
+修正では、BLE処理の例外をコンテキスト終了前に記録する。FIRST_COMPLETEDの結果だけに依存せず記録済み例外を再送出する。ローカルcleanup中の切断callbackは終了理由を上書きしない。パーサ/リレー異常、queue overflow、signalも識別する。異常はtracebackと非ゼロ終了、BLE切断・signalは理由付きの通常終了となる。SIGKILLや電源断はログを残せない。
+
+通常の進行ログ：
+
+```text
+Relay connected; requesting initial LED OFF
+BLE connecting: ...
+BLE connected; validating MIDI service
+BLE starting notify: 7772e5db-3868-4112-a1a9-f2669d106bf3
+BLE MIDI subscribed: ...
+```
+
+停止時は `Stop requested: ...` と `Session ended: <理由>; ...` を確認する。例：`BLE disconnected during notify subscription`、`BLE notify subscription failed: ...`、`MIDI/relay worker failed: ...`、`signal SIGTERM`。`Session wakeup` は完了したtask名を補助的に表示するもので、原因は理由ログとtracebackで判断する。
+
+今回の更新にApp Labコード・MCUスケッチの差分はない。動作確認済みM3リレーをRunしたまま、旧受信プロセスとmonitorを停止して、UNO Qホストのリポジトリルートで実行する：
+
+```bash
+git pull --ff-only
+source ~/blemidi/bin/activate
+python -m unittest discover -s tests -v
+python -m m3.receiver \
+  --address 9C:C3:94:81:01:53 \
+  --socket /home/arduino/ArduinoApps/m3-ble-to-led/m3-led.sock \
+  --raw
+```
+
+`BLE MIDI subscribed` 到達後、単音・和音・曲末・Ctrl+CのLEDを再確認する。再現する場合は同じコマンドの先頭を `BLEAK_LOGGING=1 python` にし、接続開始から終了理由・tracebackまで保存する。修正後のUNO Q実機検証は利用者側で実施する。
 
 ## 参照した一次資料
 
