@@ -29,12 +29,16 @@ unoq_load_config() {
     : "${UNOQ_BLE_ADDRESS:?UNOQ_BLE_ADDRESS is required}"
     : "${UNOQ_BLE_MIDI_SERVICE_UUID:?UNOQ_BLE_MIDI_SERVICE_UUID is required}"
     : "${UNOQ_BLE_MIDI_CHARACTERISTIC_UUID:?UNOQ_BLE_MIDI_CHARACTERISTIC_UUID is required}"
+    : "${UNOQ_BLE_ADVERTISE_NAME:?UNOQ_BLE_ADVERTISE_NAME is required}"
+    : "${UNOQ_BLE_ADVERTISE_START_SECONDS:?UNOQ_BLE_ADVERTISE_START_SECONDS is required}"
     UNOQ_VENV_PYTHON="$UNOQ_VENV_DIR/bin/python"
     UNOQ_REQUIREMENTS_PATH="$UNOQ_REPO_ROOT/$UNOQ_REQUIREMENTS"
     UNOQ_APP_SOURCE_PATH="$UNOQ_REPO_ROOT/$UNOQ_APP_SOURCE_DIR"
     UNOQ_LOG_DIR="$UNOQ_REPO_ROOT/logs/unoq"
     [[ "${UNOQ_WAIT_SECONDS:-120}" =~ ^[0-9]+$ ]] || \
         unoq_die "UNOQ_WAIT_SECONDS must be a nonnegative integer"
+    [[ "$UNOQ_BLE_ADVERTISE_START_SECONDS" =~ ^[0-9]+$ ]] || \
+        unoq_die "UNOQ_BLE_ADVERTISE_START_SECONDS must be a nonnegative integer"
 }
 
 unoq_require_venv() {

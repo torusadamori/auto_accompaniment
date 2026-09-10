@@ -94,8 +94,15 @@ run_workflow() {
     receiver_args=(--address "$UNOQ_BLE_ADDRESS" --socket "$UNOQ_RELAY_SOCKET")
     [[ "$raw" == 1 ]] && receiver_args+=(--raw)
     export UNOQ_BLE_MIDI_SERVICE_UUID UNOQ_BLE_MIDI_CHARACTERISTIC_UUID
-    printf 'UNOQ run: starting BLE receiver for %s (Ctrl+C to stop)\n' "$UNOQ_BLE_ADDRESS"
-    "$UNOQ_VENV_PYTHON" -B -m "$UNOQ_RECEIVER_MODULE" "${receiver_args[@]}"
+    printf 'UNOQ run: restoring proven bluetoothctl advertisement, then starting BLE receiver for %s\n' \
+        "$UNOQ_BLE_ADDRESS"
+    "$UNOQ_VENV_PYTHON" -B -m unoq.advertising \
+        --service-uuid "$UNOQ_BLE_MIDI_SERVICE_UUID" \
+        --local-name "$UNOQ_BLE_ADVERTISE_NAME" \
+        --address "$UNOQ_BLE_ADDRESS" \
+        --wait-seconds "$UNOQ_WAIT_SECONDS" \
+        --startup-seconds "$UNOQ_BLE_ADVERTISE_START_SECONDS" \
+        -- "$UNOQ_VENV_PYTHON" -B -m "$UNOQ_RECEIVER_MODULE" "${receiver_args[@]}"
 }
 
 run_workflow 2>&1 | tee -a "$log_file"

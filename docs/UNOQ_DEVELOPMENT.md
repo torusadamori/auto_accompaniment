@@ -26,7 +26,7 @@ UNO Qターミナルでrepo rootへ移動して実行する。
 
 `setup.sh` はvenvを無ければ作成し、requirementsを導入し、ログディレクトリを用意する。再実行時は既存venvを再利用し、requirementsの望ましい状態へ収束する。Python/BlueZ/App CLI/App Lab配置も確認する。
 
-`run.sh` はvenvとBleakを確認し、安全なApp同期を行い、relayが無ければAppを起動して最大設定時間待ち、BLE receiverを開始する。iPhoneアドレスやsocketの長い引数を入力する必要はない。Ctrl+Cで終了する。
+`run.sh` はvenvとBleakを確認し、安全なApp同期を行い、relayが無ければAppを起動する。続いて成功実験と同じ`bluetoothctl`のAdvertising objectを登録・保持し、iPhone接続とservice解決を待ってからBLE receiverを開始する。iPhoneアドレスやsocketの長い引数を入力する必要はない。Ctrl+Cでreceiverと自分が所有するadvertisementを終了する。
 
 `doctor.sh` は各項目を `PASS` / `WARN` / `FAIL` で表示し、1件でも `FAIL` があれば非ゼロで終了する。Appがまだ起動していない、Gitに作業中の変更がある、といった一時的な状態は原則 `WARN` になる。
 
@@ -44,6 +44,22 @@ iPhone MIDIアプリ
 ```
 
 MIDI Wrenchに表示される接続のCentral/Peripheralと、接続後にどちらがGATT client/serverとしてattributeへアクセスするかは別の役割である。ここでは役割名から推測せず、BlueZでiPhone peerのservice/characteristicとnotify packetを取得でき、同じpeerを`BleakClient`で購読できた実測を優先する。ALSA、RtMidi、`/dev/snd/seq`、PipeWireはこの経路に含めない。
+
+### Advertising ownerの復元
+
+全Git履歴、reflog、到達不能Git objectには`GattManager1`/`LEAdvertisingManager1`を実装するPython、App Labコード、systemd unitは存在しない。成功ログにある唯一のAdvertising登録は`bluetoothctl`で、実験途中の`LocalName: UNOQ-MIDI`、service UUID、`ActiveInstances: 1`が記録されている。BlueZの`bluetoothctl`は`/org/bluez/advertising`を登録し、そのD-Bus ownerが終了するとBlueZがinstanceを削除する。したがって`ActiveInstances: 0`は、その一時ownerが現在存在しない状態と整合する。過去の対話コマンド全文は保存されていないため、方式は記録どおりにし、現在の目標名`toru1`は設定ファイルで明示する。
+
+`run.sh`は同じ`bluetoothctl`/`LEAdvertisingManager1`経路を自動化し、次を登録したままreceiverを子processとして実行する。
+
+```text
+ServiceUUIDs = 03b80e5a-ede8-4b33-a751-6ce34ec4c700
+LocalName = toru1（設定値）
+Discoverable = true
+Timeout = 0
+Type = peripheral
+```
+
+既存のActiveInstanceがあれば所有権不明のため再利用し、削除しない。adapterのlocal UUIDにBLE MIDI serviceが無い場合は、advertisingだけでGATT serverを捏造せず停止する。`doctor.sh`はmanager interface、ActiveInstances、Advertising objectのD-Bus owner、local GATT UUID、識別可能なGATT application owner、system/user serviceを記録する。
 
 ## 初回のApp Lab準備
 
@@ -68,6 +84,8 @@ MIDI Wrenchに表示される接続のCentral/Peripheralと、接続後にどち
 | `UNOQ_BLE_ADDRESS` | iPhone/送信機のBlueZ address | 実機検証済み値 |
 | `UNOQ_BLE_MIDI_SERVICE_UUID` | BLE MIDI service | 標準UUID |
 | `UNOQ_BLE_MIDI_CHARACTERISTIC_UUID` | BLE MIDI characteristic | 標準UUID |
+| `UNOQ_BLE_ADVERTISE_NAME` | iPhoneに表示するlocal name | `toru1` |
+| `UNOQ_BLE_ADVERTISE_START_SECONDS` | ActiveInstance登録待ち | 10秒 |
 | `UNOQ_WAIT_SECONDS` | App/relay最大待ち時間 | 120秒 |
 | `UNOQ_APP_START_MODE` | App起動経路 | `cli` |
 | `UNOQ_UPDATE_ON_RUN` | 通常run前のGit更新 | `0` |

@@ -10,7 +10,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from unoq import deploy, doctor, runtime
+from unoq import advertising, deploy, doctor, runtime
 
 
 class DeployTests(unittest.TestCase):
@@ -186,6 +186,71 @@ class DoctorBleakTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([item[0] for item in calls], ["client", "start", "stop"])
         self.assertTrue(any(name == "BLE notify path" and level == "PASS"
                             for level, name, _ in report.results))
+
+
+class AdvertisingTests(unittest.TestCase):
+    UUID = "03b80e5a-ede8-4b33-a751-6ce34ec4c700"
+
+    class Process:
+        def __init__(self):
+            self.stdin = io.StringIO()
+            self.stdout = []
+            self.returncode = None
+        def poll(self):
+            return self.returncode
+        def wait(self, timeout=None):
+            self.returncode = 0
+            return 0
+        def terminate(self):
+            self.returncode = 0
+        def kill(self):
+            self.returncode = -9
+
+    def test_recreates_recorded_bluetoothctl_advertisement_and_keeps_owner(self):
+        process = self.Process()
+        with patch("unoq.advertising.controller_state", side_effect=[
+                (0, self.UUID), (1, self.UUID)]), \
+                contextlib.redirect_stdout(io.StringIO()):
+            owner = advertising.BluetoothctlAdvertisement(
+                self.UUID, "toru1", popen=lambda *args, **kwargs: process)
+            owner.start()
+        commands = process.stdin.getvalue().splitlines()
+        self.assertEqual(commands, [
+            "menu advertise", f"uuids {self.UUID}", "name toru1", "discoverable on",
+            "timeout 0", "back", "advertise peripheral",
+        ])
+        self.assertTrue(owner.owned)
+
+    def test_refuses_to_fake_missing_gatt_service_with_advertising_only(self):
+        with patch("unoq.advertising.controller_state", return_value=(0, "Powered: yes")):
+            with self.assertRaisesRegex(RuntimeError, "Advertising alone cannot replace"):
+                advertising.BluetoothctlAdvertisement(self.UUID).start()
+
+    def test_existing_instance_is_reused_not_unregistered(self):
+        with patch("unoq.advertising.controller_state", return_value=(1, self.UUID)), \
+                contextlib.redirect_stdout(io.StringIO()):
+            owner = advertising.BluetoothctlAdvertisement(self.UUID)
+            owner.start()
+            owner.stop()
+        self.assertIsNone(owner.process)
+        self.assertFalse(owner.owned)
+
+    def test_local_name_cannot_inject_a_bluetoothctl_command(self):
+        with self.assertRaisesRegex(ValueError, "no newlines"):
+            advertising.BluetoothctlAdvertisement(self.UUID, "toru1\nadvertise off")
+
+    def test_failed_registration_closes_bluetoothctl_owner(self):
+        process = self.Process()
+        with patch("unoq.advertising.controller_state", return_value=(0, self.UUID)), \
+                patch("unoq.advertising.time.monotonic", side_effect=[0, 1]), \
+                contextlib.redirect_stdout(io.StringIO()):
+            owner = advertising.BluetoothctlAdvertisement(
+                self.UUID, "toru1", startup_seconds=0.5,
+                popen=lambda *args, **kwargs: process)
+            with self.assertRaisesRegex(RuntimeError, "before timeout"):
+                owner.start()
+        self.assertIsNone(owner.process)
+        self.assertEqual(process.returncode, 0)
 
 
 if __name__ == "__main__":

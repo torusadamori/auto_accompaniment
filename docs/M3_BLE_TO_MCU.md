@@ -24,6 +24,8 @@ MIDI Wrenchが示すBLE接続のCentral/PeripheralとGATT client/serverは同一
 
 BLEは成功済みのホストvenvで受信する。ArduinoライブラリはApp Labに付属するものを使い、ホストvenvへ追加しない。App LabのBridge初期化・起動管理は公式例と同じ `App.run(user_loop=...)` に任せる。
 
+BLE advertisingはApp Labコードではなく、成功実験で手動登録されていた`bluetoothctl`の`LEAdvertisement1` objectだった。`run.sh`はそのowner processをreceiver実行中だけ保持する。Git履歴には別のadvertising daemonやsystemd unitは記録されていない。
+
 公式App CLIのCompose生成コードはアプリディレクトリを `/app` へbind mountする。この共有パスでUnix socketを使い、コンテナのネットワークモードには依存しない。実機のApp Lab 0.10.0でも下記のmount検査を行うこと。最新版公式ソースの確認と、当該バージョンの実測は区別する。
 
 ## ファイル

@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import re
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 import socket
@@ -46,7 +47,6 @@ async def inspect_ble(address: str, service_uuid: str, characteristic_uuid: str,
         report.add("FAIL", "BLE device", f"Bleak unavailable: {error}")
         report.add("FAIL", "BLE MIDI service UUID", "not checked")
         report.add("FAIL", "BLE MIDI characteristic UUID", "not checked")
-        return
         report.add("FAIL", "BLE notify path", "not checked")
         return
     packets = []
@@ -90,6 +90,77 @@ async def inspect_ble(address: str, service_uuid: str, characteristic_uuid: str,
             report.add("WARN", "BLE MIDI service UUID", "not checked")
             report.add("WARN", "BLE MIDI characteristic UUID", "not checked")
             report.add("WARN", "BLE notify path", "not checked")
+
+
+def inspect_advertising(show: str, service_uuid: str, report: Report):
+    match = re.search(r"ActiveInstances:.*\(([0-9]+)\)", show)
+    if not match:
+        match = re.search(r"ActiveInstances:\s*([0-9]+)", show)
+    active = int(match.group(1)) if match else 0
+    report.add("PASS" if active else "FAIL", "BLE advertising instance",
+               f"ActiveInstances={active}" if active else
+               "ActiveInstances=0; iPhone cannot discover toru1")
+    report.add("PASS" if service_uuid.lower() in show.lower() else "FAIL",
+               "local BLE MIDI GATT UUID",
+               "registered on adapter" if service_uuid.lower() in show.lower() else
+               f"missing from adapter: {service_uuid}")
+
+    code, output = command("busctl", "--system", "introspect", "org.bluez",
+                           "/org/bluez/hci0", timeout=5)
+    if code == 0:
+        for interface in ("org.bluez.LEAdvertisingManager1", "org.bluez.GattManager1"):
+            report.add("PASS" if interface in output else "FAIL", interface.rsplit(".", 1)[-1],
+                       "available on /org/bluez/hci0" if interface in output else "missing")
+    else:
+        report.add("WARN", "BlueZ manager interfaces", output or "busctl unavailable")
+
+    code, listing = command("busctl", "--system", "list", "--no-legend", "--no-pager",
+                            timeout=5)
+    if code != 0:
+        report.add("WARN", "Advertising object owner", listing or "busctl list unavailable")
+        report.add("WARN", "GATT application owner", "not inspected")
+        return
+    advertisers, gatt_apps = [], []
+    for line in listing.splitlines():
+        fields = line.split()
+        if not fields or not fields[0].startswith(":"):
+            continue
+        owner = fields[0]
+        code, tree = command("busctl", "--system", "tree", owner, "--no-pager", timeout=2)
+        if code != 0:
+            continue
+        if "/org/bluez/advertising" in tree:
+            advertisers.append(" ".join(fields[:4]))
+        paths = re.findall(r"(/[^\s]+)", tree)
+        for path in paths:
+            if not any(word in path.casefold() for word in ("service", "gatt", "midi")):
+                continue
+            code, details = command("busctl", "--system", "introspect", owner, path,
+                                    timeout=2)
+            if code == 0 and ("org.bluez.GattService1" in details or
+                              "org.bluez.GattCharacteristic1" in details):
+                gatt_apps.append(f"{' '.join(fields[:4])} path={path}")
+                break
+    report.add("PASS" if advertisers else ("FAIL" if active else "WARN"),
+               "Advertising object owner",
+               "; ".join(advertisers) if advertisers else "no exported /org/bluez/advertising owner")
+    report.add("PASS" if gatt_apps else "WARN", "GATT application owner",
+               "; ".join(gatt_apps) if gatt_apps else
+               "not identifiable from exported D-Bus object paths")
+
+
+def inspect_services(report: Report):
+    relevant = []
+    for scope in ("system", "user"):
+        args = ["systemctl"] + (["--user"] if scope == "user" else []) + [
+            "list-units", "--type=service", "--state=running", "--no-legend", "--no-pager"]
+        code, output = command(*args, timeout=8)
+        if code == 0:
+            relevant.extend(f"{scope}:{line.strip()}" for line in output.splitlines()
+                            if any(word in line.casefold()
+                                   for word in ("bluetooth", "bluez", "midi", "app-lab", "arduino")))
+    report.add("PASS" if relevant else "WARN", "BLE-related services",
+               "; ".join(relevant) if relevant else "no matching running system/user unit")
 
 
 def inspect_relay(path: Path, report: Report):
@@ -150,8 +221,10 @@ def main(argv=None) -> int:
         report.add("FAIL", "Bluetooth adapter", output or "no default adapter")
     elif "Powered: yes" in output:
         report.add("PASS", "Bluetooth adapter", "present and powered")
+        inspect_advertising(output, args.service_uuid, report)
     else:
         report.add("FAIL", "Bluetooth adapter", "present but not powered")
+    inspect_services(report)
 
     code, output = command("bluetoothctl", "info", args.address)
     if code == 0:

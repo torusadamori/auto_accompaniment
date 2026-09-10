@@ -549,3 +549,31 @@ Suggested behavior:
 This milestone validates the full control path before connecting the real accordion solenoid hardware.
 
 After M3 passes, proceed to scheduled event queues, accordion MCP23017 output and touch-bar integration.
+
+---
+
+## 19. Retrospective: advertising owner after peer removal
+
+After the known iPhone peer was removed, a fresh bind attempt showed the BLE MIDI
+UUID on the adapter but `ActiveInstances: 0`. A complete search of the Git
+history, reflog and unreachable objects found no repository-owned
+`LEAdvertisingManager1`/`GattManager1` implementation, systemd unit or App Lab
+Bluetooth code. The only preserved successful advertising evidence is section 7:
+an interactive `bluetoothctl` process registered the advertisement and
+`ActiveInstances` became 1.
+
+BlueZ's `bluetoothctl` exports its advertisement at
+`/org/bluez/advertising`. BlueZ associates a registered advertisement with that
+D-Bus client and removes the instance when the client disconnects. Therefore the
+observed zero instance is consistent with the successful interactive
+`bluetoothctl` owner no longer running; it is not evidence that the already
+proven Bleak receiver is wrong.
+
+The adapter still listing `03b80e5a-ede8-4b33-a751-6ce34ec4c700` indicates that
+the local BLE MIDI registration has a lifecycle separate from that missing
+advertisement. The repository does not contain enough evidence to name that
+GATT application's process. It must be identified on the board from the live
+system D-Bus object owners and running system/user services. The UNO Q doctor
+now collects those facts automatically. No historic `btmon` capture or complete
+advertise-menu command transcript was committed, so neither is reconstructed by
+guesswork.
