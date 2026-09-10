@@ -59,6 +59,10 @@ run_workflow() {
         unoq_die "relay path is not a Unix socket and was preserved: $UNOQ_RELAY_SOCKET"
         return
     fi
+    if [[ -S "$UNOQ_RELAY_SOCKET" ]]; then
+        "$UNOQ_VENV_PYTHON" -B -m unoq.runtime --cleanup-stale \
+            --app-dir "$UNOQ_APP_DIR" --socket "$UNOQ_RELAY_SOCKET" || return
+    fi
     if [[ ! -S "$UNOQ_RELAY_SOCKET" ]]; then
         case "${UNOQ_APP_START_MODE:-cli}" in
             cli)

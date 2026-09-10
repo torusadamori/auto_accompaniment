@@ -10,6 +10,8 @@ import tempfile
 import time
 import uuid
 
+from .runtime import app_lab_status, relay_probe, remove_stale_socket
+
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -117,9 +119,15 @@ def stop_running_app(app: Path, relay_socket: Path, wait_seconds: float = 15):
     subprocess.run(["arduino-app-cli", "app", "stop", str(app)], check=True)
     deadline = time.monotonic() + wait_seconds
     while socket_present(relay_socket):
+        reachable, _ = relay_probe(relay_socket)
+        if not reachable:
+            state, _ = app_lab_status(app)
+            if state == "stopped":
+                remove_stale_socket(relay_socket, app, app_stopped=True)
+                break
         if time.monotonic() >= deadline:
             raise RuntimeError(
-                f"App stopped but relay socket remains; preserved for inspection: {relay_socket}"
+                f"App stop returned but relay process still answers; preserved: {relay_socket}"
             )
         time.sleep(0.25)
 

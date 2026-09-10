@@ -9,6 +9,8 @@ import stat
 import subprocess
 import sys
 
+from .runtime import app_lab_status
+
 
 class Report:
     def __init__(self):
@@ -37,45 +39,57 @@ def command(*args: str, timeout: float = 5):
 
 
 async def inspect_ble(address: str, service_uuid: str, characteristic_uuid: str,
-                      timeout: float, report: Report):
+                      timeout: float, notify_seconds: float, report: Report):
     try:
-        from bleak import BleakClient, BleakScanner
+        from bleak import BleakClient
     except ImportError as error:
         report.add("FAIL", "BLE device", f"Bleak unavailable: {error}")
         report.add("FAIL", "BLE MIDI service UUID", "not checked")
         report.add("FAIL", "BLE MIDI characteristic UUID", "not checked")
         return
-    try:
-        device = await BleakScanner.find_device_by_address(address, timeout=timeout)
-    except Exception as error:
-        report.add("WARN", "BLE device", f"scan failed: {type(error).__name__}: {error}")
-        report.add("WARN", "BLE MIDI service UUID", "not checked")
-        report.add("WARN", "BLE MIDI characteristic UUID", "not checked")
+        report.add("FAIL", "BLE notify path", "not checked")
         return
-    if device is None:
-        report.add("WARN", "BLE device", f"not advertising: {address}; ready the iPhone app")
-        report.add("WARN", "BLE MIDI service UUID", "not checked")
-        report.add("WARN", "BLE MIDI characteristic UUID", "not checked")
-        return
-    report.add("PASS", "BLE device", f"found {device.address} {device.name or ''}".rstrip())
+    packets = []
+    connected = False
     try:
-        async with BleakClient(device, timeout=timeout) as client:
+        # This is the proven experiment path: use the known BlueZ peer object
+        # directly. A connected peer need not appear in a fresh advertisement scan.
+        async with BleakClient(address, timeout=timeout) as client:
+            connected = True
+            report.add("PASS", "BLE device", f"BleakClient connected to BlueZ peer {address}")
             service = client.services.get_service(service_uuid)
             if service is None:
                 report.add("FAIL", "BLE MIDI service UUID", f"missing {service_uuid}")
                 report.add("FAIL", "BLE MIDI characteristic UUID", "service missing")
+                report.add("FAIL", "BLE notify path", "service missing")
                 return
             report.add("PASS", "BLE MIDI service UUID", service_uuid)
             characteristic = service.get_characteristic(characteristic_uuid)
             if characteristic is None:
                 report.add("FAIL", "BLE MIDI characteristic UUID", f"missing {characteristic_uuid}")
+                report.add("FAIL", "BLE notify path", "characteristic missing")
             elif "notify" not in characteristic.properties:
                 report.add("FAIL", "BLE MIDI characteristic UUID", "found, but notify is unavailable")
+                report.add("FAIL", "BLE notify path", "notify property missing")
             else:
                 report.add("PASS", "BLE MIDI characteristic UUID", f"{characteristic_uuid} (notify)")
+                await client.start_notify(characteristic, lambda _sender, data: packets.append(bytes(data)))
+                await asyncio.sleep(notify_seconds)
+                await client.stop_notify(characteristic)
+                detail = (f"subscribed; received {len(packets)} packet(s)" if packets else
+                          f"subscription succeeded; no packet during {notify_seconds:g}s probe")
+                report.add("PASS", "BLE notify path", detail)
     except Exception as error:
-        report.add("WARN", "BLE MIDI service UUID", f"connection failed: {type(error).__name__}: {error}")
-        report.add("WARN", "BLE MIDI characteristic UUID", "not checked")
+        if connected:
+            report.add("WARN", "BLE notify path",
+                       f"subscription probe failed: {type(error).__name__}: {error}; "
+                       "stop another BLE monitor if it owns notify")
+        else:
+            report.add("WARN", "BLE device",
+                       f"direct connection failed: {type(error).__name__}: {error}")
+            report.add("WARN", "BLE MIDI service UUID", "not checked")
+            report.add("WARN", "BLE MIDI characteristic UUID", "not checked")
+            report.add("WARN", "BLE notify path", "not checked")
 
 
 def inspect_relay(path: Path, report: Report):
@@ -113,6 +127,7 @@ def main(argv=None) -> int:
     parser.add_argument("--service-uuid", required=True)
     parser.add_argument("--characteristic-uuid", required=True)
     parser.add_argument("--ble-timeout", type=float, default=10)
+    parser.add_argument("--notify-probe-seconds", type=float, default=1)
     args = parser.parse_args(argv)
     report = Report()
 
@@ -138,8 +153,19 @@ def main(argv=None) -> int:
     else:
         report.add("FAIL", "Bluetooth adapter", "present but not powered")
 
+    code, output = command("bluetoothctl", "info", args.address)
+    if code == 0:
+        facts = [line.strip() for line in output.splitlines()
+                 if any(key in line for key in ("Name:", "Connected:", "ServicesResolved:"))]
+        connected = "Connected: yes" in output and "ServicesResolved: yes" in output
+        report.add("PASS" if connected else "WARN", "BlueZ iPhone peer",
+                   "; ".join(facts) or f"known peer {args.address}")
+    else:
+        report.add("WARN", "BlueZ iPhone peer", output or f"peer unavailable: {args.address}")
+
     asyncio.run(inspect_ble(args.address, args.service_uuid.lower(),
-                            args.characteristic_uuid.lower(), args.ble_timeout, report))
+                            args.characteristic_uuid.lower(), args.ble_timeout,
+                            max(0, args.notify_probe_seconds), report))
 
     app = args.app_dir.expanduser()
     report.add("PASS" if app.is_dir() and (app / "app.yaml").is_file() else "FAIL",
@@ -149,6 +175,9 @@ def main(argv=None) -> int:
         code, output = command("arduino-app-cli", "--version")
     report.add("PASS" if code == 0 else "WARN", "Arduino App CLI",
                output or "not available; GUI Run fallback can be configured")
+    state, detail = app_lab_status(app)
+    report.add("PASS" if state == "running" else "WARN", "App Lab App state",
+               f"{state}: {detail}")
     inspect_relay(args.socket.expanduser(), report)
 
     code, output = command("git", "status", "--short", "--branch", timeout=10)

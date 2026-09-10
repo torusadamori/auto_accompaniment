@@ -28,7 +28,22 @@ UNO Qターミナルでrepo rootへ移動して実行する。
 
 `run.sh` はvenvとBleakを確認し、安全なApp同期を行い、relayが無ければAppを起動して最大設定時間待ち、BLE receiverを開始する。iPhoneアドレスやsocketの長い引数を入力する必要はない。Ctrl+Cで終了する。
 
-`doctor.sh` は各項目を `PASS` / `WARN` / `FAIL` で表示し、1件でも `FAIL` があれば非ゼロで終了する。iPhoneが広告していない、Appがまだ起動していない、Gitに作業中の変更がある、といった一時的な状態は原則 `WARN` になる。
+`doctor.sh` は各項目を `PASS` / `WARN` / `FAIL` で表示し、1件でも `FAIL` があれば非ゼロで終了する。Appがまだ起動していない、Gitに作業中の変更がある、といった一時的な状態は原則 `WARN` になる。
+
+## 復元した実機成功経路
+
+`docs/EXPERIMENT_LOG_2026-09-10.md` と `0be431d`〜`f7d64c7` の実装を正本とした。実機で確認済みの経路は次である。
+
+```text
+iPhone MIDIアプリ
+  → BlueZ上で接続・ServicesResolved済みpeer
+  → iPhone peerが公開するBLE MIDI GATT service
+  → UNO Q Python / BleakClient(peer address)
+  → start_notify(7772e5db-...)
+  → BleMidiParser → ActiveNotes → relay → MCU
+```
+
+MIDI Wrenchに表示される接続のCentral/Peripheralと、接続後にどちらがGATT client/serverとしてattributeへアクセスするかは別の役割である。ここでは役割名から推測せず、BlueZでiPhone peerのservice/characteristicとnotify packetを取得でき、同じpeerを`BleakClient`で購読できた実測を優先する。ALSA、RtMidi、`/dev/snd/seq`、PipeWireはこの経路に含めない。
 
 ## 初回のApp Lab準備
 
@@ -84,7 +99,7 @@ UNO Qターミナルでrepo rootへ移動して実行する。
 ./scripts/unoq/deploy.sh --sync-existing
 ```
 
-置換前の全ファイルは `<App>/.unoq-backups/<日時>-<ID>/` に保存される。途中のbackupに失敗すれば置換は始めない。単独の `deploy.sh` は稼働中を示すrelay socketがある場合に配置を拒否する。`--stop-running` を明示した場合と通常の `run.sh` だけは、変更が実際に必要なときに限って公式 `arduino-app-cli app stop` を呼び、socketが正常に消えたことを待ってから配置する。socketそのものは削除しない。
+置換前の全ファイルは `<App>/.unoq-backups/<日時>-<ID>/` に保存される。途中のbackupに失敗すれば置換は始めない。単独の `deploy.sh` は稼働中を示すrelay socketがある場合に配置を拒否する。`--stop-running` を明示した場合と通常の `run.sh` だけは、変更が実際に必要なときに限って公式 `arduino-app-cli app stop` を呼ぶ。App停止が確認でき、relayへ接続できない場合に限り、App直下の残存Unix socketだけをstaleとして削除する。通常ファイル、symlink、稼働中または状態不明のsocketは保存する。
 
 ## Appの自動起動
 
@@ -115,21 +130,24 @@ arduino-app-cli app start "$UNOQ_APP_DIR"
 
 - Python 3.11以上、設定venv、Bleak（検証版は3.0.2）
 - BlueZ (`bluetoothctl`)、Bluetooth adapterの存在と電源
-- 設定したBLE deviceの検出
+- `bluetoothctl info`による既知iPhone peerのConnected/ServicesResolved状態
 - BLE MIDI service UUIDとnotify characteristic UUIDの実機GATT確認
+- 成功時と同じ`BleakClient(address)`と`start_notify()`による短時間のnotify probe
 - App Lab directoryと `app.yaml`
-- 公式Arduino App CLI
+- 公式Arduino App CLIと対象Appの稼働状態
 - relay socketの種類
 - relayから同じLED状態を再送する `PROBE` による実Bridge RPC往復
 - Git branch/upstream/dirty状態
 
-BLEのGATT診断時はiPhone MIDIアプリを送信可能・広告可能な状態にする。別receiverが接続中なら競合を避けて先に停止する。`PROBE` は現在の論理LED状態と同じ値をBridgeへ送り、状態を変えずにLinux container→Router Bridge→STM32のACKを確認する。
+BLEのGATT診断は広告scanではなく、設定済みBlueZ peerへ直接接続する。iPhone MIDIアプリを送信可能な状態にし、可能ならprobe中にMIDIを送る。別receiverがnotifyを所有して競合する場合はdoctorがWARNにするため、完全なprobeにはreceiverを先に停止する。`PROBE` は現在の論理LED状態と同じ値をBridgeへ送り、状態を変えずにLinux container→Router Bridge→STM32のACKを確認する。
+
+過去の`bluetoothctl`ログに保存されている手順は、接続済みpeerのGATT attribute一覧から上記characteristicを選択して `notify on` を実行するものだった。結果は `Notifying: yes`、`Notify started` と生BLE MIDI packetである。characteristic選択までの個々の対話コマンドは実験ログに保存されていないため、新たに推測して手順化せず、doctorが同じBlueZ peerとUUIDをAPIで検証する。
 
 ## 安全上の境界
 
 - repoが正本。App Lab側の未知の変更は自動mergeも自動破棄もしない。
 - App全体のコピー、削除、`rm -rf`、Git reset/stash、dirty treeへのpullは行わない。
-- socketが通常ファイルやsymlinkなら削除せず `FAIL` にする。
+- socketが通常ファイルやsymlinkなら削除せず `FAIL` にする。stale削除は公式App停止確認とlistener不在の両方を必要とする。
 - 自動停止は配置差分がある通常runに限定し、公式App CLIを使用する。差分がなければ稼働Appを止めない。
 - App Lab/MCUの起動は公式CLIだけを使う。非公式Docker構成や書込手順は推測しない。
 - `setup.sh` は既存の非venvディレクトリをvenvとして上書きしない。
@@ -145,7 +163,7 @@ python -m compileall -q m3 unoq experiments/m3_app/python tests
 bash -n scripts/unoq/*.sh scripts/m3_run_unoq.sh
 ```
 
-BLE scan、App start、MCU flash、Bridge `PROBE` はUNO Q実機で `doctor.sh` と `run.sh` を使って確認する。開発PCで実機成功を推測しない。
+BLE接続/notify、App start、MCU flash、Bridge `PROBE` はUNO Q実機で `doctor.sh` と `run.sh` を使って確認する。開発PCで実機成功を推測しない。
 
 ## 公式資料
 

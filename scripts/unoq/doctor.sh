@@ -13,4 +13,5 @@ exec "$UNOQ_VENV_PYTHON" -B -m unoq.doctor \
     --service-uuid "$UNOQ_BLE_MIDI_SERVICE_UUID" \
     --characteristic-uuid "$UNOQ_BLE_MIDI_CHARACTERISTIC_UUID" \
     --ble-timeout "${UNOQ_BLE_PROBE_SECONDS:-10}" \
+    --notify-probe-seconds "${UNOQ_BLE_NOTIFY_PROBE_SECONDS:-1}" \
     "$@"

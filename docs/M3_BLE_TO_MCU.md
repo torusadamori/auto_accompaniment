@@ -20,6 +20,8 @@ Arduino Router → Arduino_RouterBridge → STM32U585
   set_led_state(bool) → LED_BUILTIN（LOW = 点灯）
 ```
 
+MIDI Wrenchが示すBLE接続のCentral/PeripheralとGATT client/serverは同一概念ではない。実験では、接続後のBlueZ上でiPhone peerがservice `03b80e5a-ede8-4b33-a751-6ce34ec4c700` とcharacteristic `7772e5db-3868-4112-a1a9-f2669d106bf3` を公開し、UNO QのBleakClientからnotify購読できた。この観測結果を実装の根拠とする。
+
 BLEは成功済みのホストvenvで受信する。ArduinoライブラリはApp Labに付属するものを使い、ホストvenvへ追加しない。App LabのBridge初期化・起動管理は公式例と同じ `App.run(user_loop=...)` に任せる。
 
 公式App CLIのCompose生成コードはアプリディレクトリを `/app` へbind mountする。この共有パスでUnix socketを使い、コンテナのネットワークモードには依存しない。実機のApp Lab 0.10.0でも下記のmount検査を行うこと。最新版公式ソースの確認と、当該バージョンの実測は区別する。
@@ -67,7 +69,7 @@ BLEは成功済みのホストvenvで受信する。ArduinoライブラリはApp
 - 独自編集をrepo版に置き換える場合は、まず `./scripts/m3_run_unoq.sh --dry-run --sync-existing` で対象を確認し、必要なら `./scripts/m3_run_unoq.sh --sync-existing` でバックアップ付き同期する。自動mergeはしない。
 - 同期が必要なのにsocketが残っている場合は、稼働中かどうかを推測せず停止する。App LabでM3をStopしてから同じコマンドを実行し、同期後の案内に従ってRunする。この更新時だけStop/Runが必要。
 - `app.yaml`、`sketch.yaml`、その他のAppファイルは変更しない。Appや対象ファイルがsymlinkの場合は拒否する。成功済みの別Appを上書きしないよう、表示されるAppパスを確認する。
-- socketの存在・種類・権限を確認するが、確認目的の接続/LED操作はしない。実際の接続・最初のOFF ACKはreceiverで行う。古いsocketが残って接続拒否になる場合は既存の復旧手順を使う。socketを自動削除しない。
+- socketの存在・種類・権限を確認する。App停止が公式CLIで確認でき、listenerへ接続不能なApp直下のUnix socketだけはstaleとして安全に削除する。通常ファイル、symlink、稼働中/状態不明のsocketは削除しない。
 
 ### オプション
 
