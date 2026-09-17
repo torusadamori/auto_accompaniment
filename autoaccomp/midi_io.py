@@ -45,7 +45,7 @@ def input_port(value):
     return api.open_input(resolve_port(value, api.get_input_names()))
 
 
-def forward_pending(source, target=None, monitor=False):
+def forward_pending(source, target=None, monitor=False, on_message=None):
     # Bound each batch so a busy input cannot starve accompaniment scheduling.
     for _ in range(256):
         message = source.poll()
@@ -53,6 +53,8 @@ def forward_pending(source, target=None, monitor=False):
             break
         if monitor:
             print(message)
+        if on_message is not None:
+            on_message(message)
         if target is not None and message.type in {
             "note_on", "note_off", "polytouch", "aftertouch", "pitchwheel", "control_change"
         }:

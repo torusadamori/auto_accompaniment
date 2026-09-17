@@ -35,7 +35,7 @@ class MusicTests(unittest.TestCase):
 
     def test_progression_and_rejection(self):
         self.assertEqual([c.symbol for c in progression()], ["Cmaj7", "A7", "Dm7", "G7"])
-        for bad in ("C", "H7", "Am", "Cmaj9"):
+        for bad in ("H7", "Cdim", "Cmaj9"):
             with self.assertRaises(ValueError):
                 parse_chord(bad)
         with self.assertRaises(ValueError):

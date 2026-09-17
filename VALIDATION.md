@@ -45,3 +45,17 @@
 - `autoaccomp/`、`tests/test_music.py`、`requirements.txt` は元の最終コミットと差分なし。
 - UNO Q関連の `unoq/`、`m3/`、`scripts/`、`experiments/`、`config/` と既存テストは変更なし。
 - UNO Q実機の再検証は行っていない。
+
+## 第二MVP followモード（2026-09-17）
+
+- 作業ディレクトリとGitルート: `D:\GitProjects\Music\auto_accompaniment`。
+- 開始HEAD: `ec4480863c30b44bffb90e23eb582c9f588b075d`。
+- `python -m unittest discover -s tests`: 89件中86件成功、従来と同じ環境条件で3件スキップ。
+- 第二MVPの追加12テストで、全12ルート×5種類の転回形、入力保持、次拍同期、
+  C→Am→Dm→G7の両伴奏パート、転送、休止、消音、遅延とキュー上限を確認。
+- `follow --input "MIDIFlex4 0" --output "Microsoft GS Wavetable Synth 0" --bars 2`
+  を120 BPMで実行。ポートを開き、`Detected chord: (no notes)` を一度表示して正常終了。
+  遅延による発音スキップ0件（この実行では入力コードがなく、伴奏の発音なし）。
+- UNO Q関連のコード・設定・スクリプト・既存のUNO Qテストは変更なし。
+- 物理鍵盤での認識、実音、演奏時の遅延と追従感は未確認。
+  [第二MVPの実演テスト](docs/PC_FOLLOW_MVP.md)で評価する。

@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import re
 from .config import PROGRESSION
 
-QUALITIES = {"maj7": (0, 4, 7, 11), "7": (0, 4, 7, 10),
+QUALITIES = {"": (0, 4, 7), "m": (0, 3, 7), "maj7": (0, 4, 7, 11), "7": (0, 4, 7, 10),
              "m7": (0, 3, 7, 10), "m7b5": (0, 3, 6, 10)}
 ROOTS = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
 
@@ -20,9 +20,9 @@ class Chord:
 
 
 def parse_chord(symbol):
-    match = re.fullmatch(r"([A-G])([#b]?)(maj7|m7b5|m7|7)", symbol)
+    match = re.fullmatch(r"([A-G])([#b]?)(maj7|m7b5|m7|7|m|)", symbol)
     if not match:
-        raise ValueError(f"Unsupported chord {symbol!r}; use Cmaj7, A7, Dm7, Bm7b5, etc.")
+        raise ValueError(f"Unsupported chord {symbol!r}; use C, Am, Cmaj7, A7, Dm7, Bm7b5, etc.")
     letter, accidental, quality = match.groups()
     root = (ROOTS[letter] + {"": 0, "#": 1, "b": -1}[accidental]) % 12
     return Chord(symbol, root, QUALITIES[quality])

@@ -20,6 +20,13 @@ class Scheduler:
                 heapq.heappush(self.queue, (beat, priority, next(self.counter),
                                            note.channel, note.pitch, velocity))
 
+    def clear(self):
+        """Cancel old harmony and release only this scheduler's own voices."""
+        self.queue.clear()
+        for channel, pitch in sorted(self.active):
+            self.output.send(mido.Message("note_off", channel=channel, note=pitch, velocity=0))
+        self.active.clear()
+
     def tick(self, beat):
         while self.queue and self.queue[0][0] <= beat:
             due, priority, _, channel, pitch, velocity = heapq.heappop(self.queue)

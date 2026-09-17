@@ -9,6 +9,7 @@ from .transport import run
 from . import comping, walking_bass
 from .scheduler import Scheduler
 from .midi_io import list_ports, input_port, output_port, forward_pending
+from .follow import Follower, run_follow
 
 
 def parser():
@@ -27,6 +28,13 @@ def parser():
     play.add_argument("--chords", nargs="+", default=PROGRESSION)
     play.add_argument("--no-bass", action="store_true", help="Listen to comping only")
     play.add_argument("--no-comping", action="store_true", help="Listen to bass only")
+    follow = commands.add_parser("follow", help="Recognize held chords and follow on the next beat")
+    follow.add_argument("--input", required=True)
+    follow.add_argument("--output", required=True)
+    follow.add_argument("--tempo", type=float, default=TEMPO)
+    follow.add_argument("--bars", type=int, default=0)
+    follow.add_argument("--no-bass", action="store_true")
+    follow.add_argument("--no-comping", action="store_true")
     for name in ("monitor", "thru", "test-tone"):
         command = commands.add_parser(name)
         if name != "test-tone":
@@ -50,6 +58,9 @@ def main():
             return
         if args.command == "play":
             play_accompaniment(args)
+            return
+        if args.command == "follow":
+            follow_accompaniment(args)
             return
         deadline = time.perf_counter() + args.seconds if args.seconds > 0 else float("inf")
         if args.command == "monitor":
@@ -104,6 +115,20 @@ def play_accompaniment(args):
             print("Playing in 4/4. Ctrl+C stops.", flush=True)
             run(chords, args.tempo, args.bars, on_bar, service, scheduler.tick)
             print(f"Late attacks skipped: {scheduler.skipped}")
+
+
+def follow_accompaniment(args):
+    with output_port(args.output) as target:
+        with input_port(args.input) as source:
+            for channel in (MELODY_CHANNEL, COMP_CHANNEL):
+                target.send(mido.Message("program_change", channel=channel, program=0))
+            target.send(mido.Message("program_change", channel=BASS_CHANNEL, program=32))
+            follower = Follower(target, args.no_bass, args.no_comping,
+                                report=lambda line: print(line, flush=True))
+            print("Follow mode: play a chord. Changes apply on the next beat; Ctrl+C stops.", flush=True)
+            run_follow(follower, args.tempo, args.bars,
+                       lambda: forward_pending(source, target, on_message=follower.notes.receive))
+            print(f"Late attacks skipped: {follower.scheduler.skipped}")
 
 
 if __name__ == "__main__":

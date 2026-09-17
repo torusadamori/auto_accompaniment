@@ -1,5 +1,7 @@
 # PC AutoAccomp MVP
 
+入力コードに追従する第二MVPは [followモードの手順](PC_FOLLOW_MVP.md) を参照。
+
 Windows / Python 3.12。プロジェクト内の仮想環境を使用します。
 以下のコマンドはリポジトリルート `D:\GitProjects\Music\auto_accompaniment` で実行してください。
 UNO Q版とは独立したPC用アプリです。ルートの `requirements.txt` はPC版用で、
@@ -55,7 +57,7 @@ PC音源は `Microsoft GS Wavetable Synth 0` です。
 .\.venv\Scripts\python.exe -m autoaccomp.main play --input 0 --output 0 --tempo 100 --chords Am7 D7 Gmaj7 Cmaj7 F#m7b5 B7 Em7 Em7
 ```
 
-`--bars 0`（既定値）は無限ループ。コードはmaj7 / m7 / 7 / m7b5とシャープ・フラットに対応。
+`--bars 0`（既定値）は無限ループ。コードはMajor / Minor / maj7 / m7 / 7 / m7b5とシャープ・フラットに対応。
 現状はすべて1小節単位です。MIDIファイルの再生・出力は実装対象外です。
 
 ## 耳での評価
