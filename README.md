@@ -1,8 +1,9 @@
 # Auto Accompaniment
 
-現在の主軸は **Loopian Phase 1: 既存曲の文脈に沿うリアルタイムMIDI整形** です。
-人間の鍵盤入力を上昇・下降のジェスチャーとして読み、固定曲のコード・拍・音域に沿う音程へ変換します。
-起動方法と実鍵盤テストは [Loopian Phase 1](docs/LOOPIAN_PHASE1.md) を参照してください。
+現在の主軸は **Loopian Phase 2: 既存MIDIメロディを人間のジェスチャーで演奏** です。
+人間のNote OnごとにMIDI素材を1音進め、原音高で鳴らすdirectと、入力方向・元の相対音程・コードで変形するtransformを比較できます。
+起動方法と実鍵盤テストは [Loopian Phase 2](docs/LOOPIAN_PHASE2.md) を参照してください。
+MIDIファイルを指定しない [Loopian Phase 1](docs/LOOPIAN_PHASE1.md) も維持しています。
 従来の `play` / `follow` / `melody-follow`、Basic + harmony-stable は独立した既存機能として維持します。
 
 以下は従来の伴奏・ハードウェア構想です。
@@ -156,7 +157,7 @@ https://github.com/torusadamori/auto_accompaniment
 
 ## 現在の優先順位
 
-1. PCでLoopian Phase 1の上昇・下降ジェスチャーとコード追従を実鍵盤評価
+1. PCでLoopian Phase 2のMIDIメロディ素材と人間ジェスチャーの組合せを実鍵盤評価
 2. 既存メロディの輪郭参照、入力リズム変形、モチーフ変形へ段階的に発展
 3. FLOW的タイミング補正、QUBIT的フレーズ生成の検討
 

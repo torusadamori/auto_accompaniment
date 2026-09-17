@@ -14,7 +14,7 @@ from .melody_follow import MelodyFollower
 from .output_diagnostics import AuditedOutput, configure_melody_output
 from .input_diagnostics import monitor, raw_monitor
 from .melody_recording import record, replay
-from .loopian import DEFAULT_CHORDS, run_loopian
+from .loopian import run_loopian
 
 
 def parser():
@@ -24,12 +24,19 @@ def parser():
     loopian = commands.add_parser("loopian", help="Shape keyboard gestures using an authored C-major song")
     loopian.add_argument("--input", required=True)
     loopian.add_argument("--output", required=True)
-    loopian.add_argument("--tempo", type=float, default=120)
+    loopian.add_argument("--tempo", type=float, help="Override MIDI tempo; otherwise MIDI tempo or 120 BPM")
+    loopian.add_argument("--midi-file", help="SMF melody material; never automatically played")
+    loopian.add_argument("--melody-track", type=int, help="Zero-based MIDI track index")
+    loopian.add_argument("--melody-channel", type=int, choices=range(1, 17), help="MIDI channel 1..16")
+    loopian.add_argument("--loopian-mode", choices=("gesture", "melody-direct", "melody-transform"),
+                        help="Default: melody-transform with MIDI, gesture without MIDI")
     loopian.add_argument("--bars", type=int, default=0)
-    loopian.add_argument("--chords", nargs="+", choices=("Cmaj7", "Dm7", "G7"), default=DEFAULT_CHORDS)
+    loopian.add_argument("--chords", nargs="+", choices=("Cmaj7", "Dm7", "G7"),
+                        help="Override MIDI chord markers with a repeating one-chord-per-bar progression")
     loopian.add_argument("--range-low", "--note-min", dest="note_min", type=int, default=48)
     loopian.add_argument("--range-high", "--note-max", dest="note_max", type=int, default=96)
-    loopian.add_argument("--grid", type=int, choices=(0, 8, 16), default=16, help="0 disables timing correction")
+    loopian.add_argument("--grid", type=int, choices=(0, 8, 16),
+                        help="0 disables timing correction (default: MIDI=0, gesture=16)")
     loopian.add_argument("--timing-strength", type=float, default=0.5)
     loopian.add_argument("--timing-window-ms", type=float, default=30)
     loopian.add_argument("--debug-loopian", action="store_true")
