@@ -4,14 +4,41 @@ import math
 import time
 from . import comping, walking_bass
 from .chord_detection import HeldNotes, detect
-from .config import BEATS_PER_BAR
+from .config import BEATS_PER_BAR, COMP_CHANNEL, BASS_CHANNEL
+from .events import Note
 from .scheduler import Scheduler
 
 
+class DebugOutput:
+    """Observe successfully sent attacks, never planned or dropped events."""
+    def __init__(self, output, report):
+        self.output = output
+        self.report = report
+        self.sent = []
+
+    def send(self, message):
+        self.output.send(message)
+        if message.type == "note_on" and message.velocity > 0:
+            self.sent.append((message.channel, message.note))
+
+    def flush(self, chord, beat):
+        sent, self.sent = self.sent, []
+        if not sent:
+            return
+        self.report(f"Accompaniment output: {chord.symbol} (beat {beat:.2f})")
+        comp = [pitch for channel, pitch in sent if channel == COMP_CHANNEL]
+        bass = [pitch for channel, pitch in sent if channel == BASS_CHANNEL]
+        if comp:
+            self.report(f"Comping notes: {comp}")
+        for pitch in bass:
+            self.report(f"Bass note: {pitch}")
+
+
 class Follower:
-    def __init__(self, output, no_bass=False, no_comping=False, report=print):
+    def __init__(self, output, no_bass=False, no_comping=False, report=print, debug_accomp=False):
         self.notes = HeldNotes()
-        self.scheduler = Scheduler(output)
+        self.debug_output = DebugOutput(output, report) if debug_accomp else None
+        self.scheduler = Scheduler(self.debug_output or output)
         self.no_bass = no_bass
         self.no_comping = no_comping
         self.report = report
@@ -86,8 +113,23 @@ class Follower:
                     # Future harmony is unknown: approach the current root until it changes.
                     bass = walking_bass.generate(self.current, self.current)[phase]
                     events.append(replace(bass, beat=0))
+                if self.debug_output is not None and age == 0:
+                    # A clear root-position chord only on the change beat.
+                    # Subsequent beats keep the existing jazz comping and bass.
+                    events = []
+                    if not self.no_comping:
+                        voices = tuple(60 + self.current.root + interval
+                                       for interval in self.current.intervals)
+                        events.extend(Note(0, 0.70, pitch, 78, COMP_CHANNEL) for pitch in voices)
+                        self.previous = voices
+                    if not self.no_bass:
+                        events.append(Note(0, 0.92, walking_bass.root_note(self.current), 84, BASS_CHANNEL))
                 self.scheduler.add(events, boundary)
-        self.scheduler.tick(beat)
+        try:
+            self.scheduler.tick(beat)
+        finally:
+            if self.debug_output is not None:
+                self.debug_output.flush(self.current, beat)
 
 
 def run_follow(follower, tempo, bars, service):

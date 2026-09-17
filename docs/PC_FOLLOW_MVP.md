@@ -78,6 +78,46 @@ Major三和音はmaj7、Minor三和音はm7相当の色付けを行い、
 Ctrl+Cで全音が止まることを確認してください。
 最終的な成功判定は「伴奏がついてくる」という演奏感の評価です。
 
+## 伴奏出力の検証モード
+
+音程の知識がなくても、認識結果と送信した伴奏ノートの変化を確認できます。
+
+```powershell
+.\.venv\Scripts\python.exe -m autoaccomp.main follow --input "MIDIFlex4 0" --output "Microsoft GS Wavetable Synth 0" --debug-accomp
+```
+
+コード変更後の最初の拍だけ、ルートから積んだ和音（velocity 78）と
+ルートベース（velocity 84）を鳴らします。その後は既存のコンピングとウォーキングベースです。
+通常モードのボイシング・音量・入力転送・80ms収集・有効コード保持は変わりません。
+`--no-bass` / `--no-comping` によるミュートも有効です。
+
+次のコードを順に弾き、離鍵後も保持して各コードの最初の発音を確認してください。
+
+| 入力 | Detected / Active | 最初のComping notes | 最初のBass note |
+| --- | --- | --- | --- |
+| C E G | C | [60, 64, 67] | 36 |
+| D F A | Dm | [62, 65, 69] | 38 |
+| E G B | Em | [64, 67, 71] | 40 |
+| F A C | F | [65, 69, 72] | 41 |
+| G B D | G | [67, 71, 74] | 43 |
+
+表示例:
+
+```text
+Detected chord: Dm
+Active accompaniment chord: Dm
+Accompaniment output: Dm (beat 5.00)
+Comping notes: [62, 65, 69]
+Bass note: 38
+```
+
+ノート番号は予告値ではなく、MIDI出力のsendが成功したNote Onから記録します。
+同時発音の和音はまとめ、発音のないループやNote Offでは表示しません。
+遅延で省略された音・ミュートされた音・送信失敗した音も送信済みとして表示しません。
+`Accompaniment output` のコードはその発音を生成した伴奏コードです。
+新コード認識から次拍までの間は、直前のコードの出力が表示される場合があります。
+MIDI送信の成功はスピーカーからの実音を保証しないため、音源の音量と受信設定も確認してください。
+
 ## 自動検証
 
 ```powershell

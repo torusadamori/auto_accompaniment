@@ -35,6 +35,8 @@ def parser():
     follow.add_argument("--bars", type=int, default=0)
     follow.add_argument("--no-bass", action="store_true")
     follow.add_argument("--no-comping", action="store_true")
+    follow.add_argument("--debug-accomp", action="store_true",
+                        help="Log sent accompaniment notes and emphasize chord changes")
     for name in ("monitor", "thru", "test-tone"):
         command = commands.add_parser(name)
         if name != "test-tone":
@@ -124,7 +126,7 @@ def follow_accompaniment(args):
                 target.send(mido.Message("program_change", channel=channel, program=0))
             target.send(mido.Message("program_change", channel=BASS_CHANNEL, program=32))
             follower = Follower(target, args.no_bass, args.no_comping,
-                                report=lambda line: print(line, flush=True))
+                                report=lambda line: print(line, flush=True), debug_accomp=args.debug_accomp)
             print("Follow mode: play a chord. Changes apply on the next beat; Ctrl+C stops.", flush=True)
             run_follow(follower, args.tempo, args.bars,
                        lambda: forward_pending(source, target, on_message=follower.receive))
