@@ -80,3 +80,44 @@ Ctrl+Cで再生を止めた場合は、そこまでに出力した件数を表�
 既存の `play` / `follow` / `melody-follow` の動作は変更していません。
 以前の同期なしJSONも再生できますが、その拍位相は自動補正しません。同期比較には新しく録音してください。
 クリックもMIDI音源経由なので音源の発音遅延は残ります。今回の変更は録音・再生の論理的な拍の原点を揃えるものです。
+
+## BasicにJazz要素を1つずつ追加する
+
+`replay-melody --style basic` に次の独立オプションを追加できます。
+省略した機能はOFFです。既存の `--style jazz` はそのまま残し、独立オプションとの併用はエラーにします。
+
+| オプション | 変更するもの | 維持するもの |
+| --- | --- | --- |
+| `--harmony-stable` | JazzHarmonyの原則4拍・小節頭変更、強い根拠なら2拍で変更 | Basicの伴奏生成。選択コード変更による音の変化はある |
+| `--jazz-voicing` | コンピングの音高を3rd/7th/9th等の近接ボイシングへ | コード推定、発音位置、音長、Velocity、ベース |
+| `--smooth-bass` | ベースの音高を36〜50の近接音・アプローチ音へ | コード推定、4分音符の位置、音長、Velocity、コンピング |
+| `--syncopated-comping` | 小節単位で4つのリズムをseed付きで巡回 | コード推定、Basicのボイシング、音長・Velocityの設定、ベース |
+
+ベースとリズムは別々の乱数系列を使います。一方をONにしても他方の抽選は変わりません。
+密度抑制・メロディ音域への回避・音量増強は追加しません。全4つONでも既存Jazz一式とは別の比較条件です。
+smooth-bassは未来のコードを先読みせず、現在コードのルートへ半音/全音で接続するラインを使います。
+シンコペーションは小節基準、Basicの既存パターンはコード変更からの経過拍基準です。
+コード変更時の予約音キャンセルにより、リズム変更後は実際の発音数が変わる場合があります。
+
+同じPowerShellで以下を順に実行します。共通引数を固定し、各行では1要素だけ変更しています。
+
+```powershell
+$abArgs = @('-m', 'autoaccomp.main', 'replay-melody', '--input-file', 'test_melody_sync.json', '--output', 'Microsoft GS Wavetable Synth 0', '--style', 'basic', '--seed', '1', '--mute-melody')
+
+.\.venv\Scripts\python.exe @abArgs
+.\.venv\Scripts\python.exe @abArgs --harmony-stable
+.\.venv\Scripts\python.exe @abArgs --jazz-voicing
+.\.venv\Scripts\python.exe @abArgs --smooth-bass
+.\.venv\Scripts\python.exe @abArgs --syncopated-comping
+```
+
+組み合わせ例：
+
+```powershell
+.\.venv\Scripts\python.exe @abArgs --harmony-stable --smooth-bass
+.\.venv\Scripts\python.exe @abArgs --harmony-stable --jazz-voicing --smooth-bass --syncopated-comping
+```
+
+起動・終了時の `Basic additions:` に有効な機能を表示します。`none` が比較基準です。
+既存の送信件数・コード列・`--debug-accomp`・`--mute-melody` もそのまま利用できます。
+この独立比較のCLIオプションはreplay-melody用です。実演奏のmelody-followは既存のままです。

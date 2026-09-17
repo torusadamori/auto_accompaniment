@@ -199,3 +199,17 @@
 - 実MIDIFlex4 1と既定GS出力で、2小節カウントイン＋1秒録音・保存を実行。
   入力0イベント（鍵盤演奏は依頼していない）。クリックに合わせた実演奏と聴感比較は未実施。
 - 既存JSONとクリックなし録音は互換。play/follow/melody-follow/UNO Qは変更なし。
+
+## Basicへの独立Jazz要素追加（2026-09-17）
+
+- replay-melodyにharmony-stable/jazz-voicing/smooth-bass/syncopated-compingを追加。
+  Basic基準で選択した部分だけ切替。独立した乱数系列でベースとパターンを分離。
+  既存Jazz一式・同期録音・実演奏モード・UNO Q実装は変更なし。
+- 7テスト追加。全16組合せのseed再現・ミュート不変、対象外パート不変、音高変更時の
+  タイミング/Velocity不変、安定化のコード列変更、CLI→send→機能表示を検証。
+  比較エンジンの全OFFは既存Followerの送信イベントと一致。
+- 全158テスト中155件成功、既存と同じ環境条件で3件スキップ。
+- 既存test_melody_sync.json（150イベント、18.041秒、120 BPM）を読み取り、
+  5条件のイベント生成を確認。ファイルは変更せず、MIDI実送信・聴感評価は今回は未実施。
+  basic: コード変更8/Comping48/Bass34、harmony-stable: 5/51/34、
+  jazz-voicing: 8/48/34、smooth-bass: 8/48/34、syncopated-comping: 8/51/34。

@@ -10,6 +10,7 @@ from .config import MELODY_CHANNEL, COMP_CHANNEL, BASS_CHANNEL
 from .midi_io import input_port, output_port
 from .melody_follow import MelodyFollower
 from .output_diagnostics import AuditedOutput, configure_melody_output
+from .comparison import FEATURES, comparison_follower
 
 FORMAT = "autoaccomp-melody-v1"
 INPUT_TYPES = {"note_on", "note_off", "polytouch", "aftertouch", "pitchwheel", "control_change"}
@@ -141,13 +142,19 @@ class TimelineOutput:
         self.events.append((self.now, message.copy()))
 
 
-def render(tempo, duration, inputs, style="basic", seed=1, mute_melody=False):
+def render(tempo, duration, inputs, style="basic", seed=1, mute_melody=False, **features):
     """Use exact logical times, not OS wake-up times, for all harmony decisions."""
     validate_tempo(tempo)
+    if set(features)-set(FEATURES):
+        raise ValueError("Unknown comparison feature.")
+    if style != "basic" and any(features.values()):
+        raise ValueError("Independent comparison options require --style basic; jazz remains unchanged.")
     output = TimelineOutput()
     # Both styles share progression-aware scoring as their baseline. Only style differs.
     follower = MelodyFollower(output, tempo=tempo, start=0, progression_aware=True,
                               style=style, seed=seed, report=lambda _: None)
+    if any(features.values()):
+        follower = comparison_follower(output, tempo, seed, features)
     seconds_per_beat = 60/tempo
     end = max(4, math.ceil(duration/seconds_per_beat/4)*4)*seconds_per_beat
     index = boundary = 0
@@ -185,9 +192,12 @@ def replay(args):
     if args.tempo is not None:
         # Tempo is the harmony clock; recorded real-time input remains identical.
         tempo = args.tempo
-    events, changes, end = render(tempo, duration, inputs, args.style, args.seed, args.mute_melody)
+    features = {name: getattr(args, name, False) for name in FEATURES}
+    events, changes, end = render(tempo, duration, inputs, args.style, args.seed, args.mute_melody, **features)
+    feature_label = ", ".join(name.replace("_", "-") for name, enabled in features.items() if enabled) or "none"
     digest = hashlib.sha256(Path(args.input_file).read_bytes()).hexdigest()[:16]
     print(f"Recording: {digest}; Tempo: {tempo}; Seed: {args.seed}; Style: {args.style}", flush=True)
+    print(f"Basic additions: {feature_label}", flush=True)
     print(f"Input events: {len(inputs)}; duration including final bar: {end:.3f}s; "
           f"Melody: {'muted' if args.mute_melody else 'enabled'}", flush=True)
     print("Replay uses progression-aware harmony for both styles. Ctrl+C stops.", flush=True)
@@ -219,6 +229,7 @@ def replay(args):
             while (remaining := start+end-time.perf_counter()) > 0:
                 time.sleep(min(remaining, 0.002))
         finally:
+            print(f"Basic additions: {feature_label}", flush=True)
             print(f"Style: {args.style}\nChord changes: {max(0, len(applied)-1)} (initial chord excluded)\n"
                   f"Comping note-ons: {output.attacks[COMP_CHANNEL]}\nBass note-ons: {output.attacks[BASS_CHANNEL]}\n"
                   f"Melody note-ons: {output.attacks[MELODY_CHANNEL]}", flush=True)

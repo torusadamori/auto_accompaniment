@@ -36,6 +36,8 @@ def parser():
     playback.add_argument("--tempo", type=float, help="Override harmony tempo; recorded timing stays unchanged")
     playback.add_argument("--mute-melody", action="store_true")
     playback.add_argument("--debug-accomp", action="store_true")
+    for option in ("harmony-stable", "jazz-voicing", "smooth-bass", "syncopated-comping"):
+        playback.add_argument("--"+option, action="store_true", help="Independent addition to --style basic")
     clock = commands.add_parser("progression", help="Run the fixed 4/4 chord clock")
     clock.add_argument("--tempo", type=float, default=TEMPO)
     clock.add_argument("--bars", type=int, default=0)
