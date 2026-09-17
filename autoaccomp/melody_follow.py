@@ -3,13 +3,15 @@ import time
 from .follow import Follower
 from .melody_history import MelodyHistory
 from .harmony_estimator import HarmonyEstimator
+from .progression_estimator import ProgressionEstimator
 
 
 class MelodyFollower:
     def __init__(self, output, tempo=120, key="C", no_bass=False, no_comping=False,
-                 report=print, debug_harmony=False, debug_accomp=False, start=None):
+                 report=print, debug_harmony=False, debug_accomp=False, start=None, progression_aware=False):
         self.history = MelodyHistory()
-        self.estimator = HarmonyEstimator(key)
+        self.progression_aware = progression_aware
+        self.estimator = ProgressionEstimator(key) if progression_aware else HarmonyEstimator(key)
         self.engine = Follower(output, no_bass, no_comping, report, debug_accomp)
         self.scheduler = self.engine.scheduler
         self.tempo = tempo
@@ -30,10 +32,18 @@ class MelodyFollower:
             notes = self.history.recent(boundary)
             previous = self.estimator.current
             chord, scores = self.estimator.estimate(notes, boundary, self.history.window_beats)
-            if self.debug_harmony:
+            if self.debug_harmony and (not self.progression_aware or self.estimator.evaluated):
                 self.report(f"Melody notes: {[note.note for note in notes]}")
                 ranking = sorted(scores.items(), key=lambda item: item[1], reverse=True)
-                self.report("Candidates: " + ", ".join(f"{name}={score:.2f}" for name, score in ranking))
+                if self.progression_aware:
+                    self.report(f"Current chord: {previous.symbol if previous else '(none)'}")
+                    self.report("Candidate scores:")
+                    for name, score in ranking:
+                        part = self.estimator.parts[name]
+                        self.report(f"{name:2} melody={part.melody:.2f} transition={part.transition:.2f} "
+                                    f"hold={part.hold:.2f} bar={part.bar:.2f} total={score:.2f}")
+                else:
+                    self.report("Candidates: " + ", ".join(f"{name}={score:.2f}" for name, score in ranking))
             if chord is not None and chord != previous:
                 self.report(f"Estimated chord: {chord.symbol}")
             self.engine.detected = chord

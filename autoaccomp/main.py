@@ -48,6 +48,8 @@ def parser():
     melody.add_argument("--no-comping", action="store_true")
     melody.add_argument("--debug-harmony", action="store_true")
     melody.add_argument("--debug-accomp", action="store_true")
+    melody.add_argument("--progression-aware", action="store_true",
+                        help="Prefer stable progressions and bar boundaries; freeze estimation during rests")
     for name in ("monitor", "thru", "test-tone"):
         command = commands.add_parser(name)
         if name != "test-tone":
@@ -155,7 +157,8 @@ def melody_accompaniment(args):
             target.send(mido.Message("program_change", channel=BASS_CHANNEL, program=32))
             follower = MelodyFollower(target, args.tempo, args.key, args.no_bass, args.no_comping,
                                       report=lambda line: print(line, flush=True),
-                                      debug_harmony=args.debug_harmony, debug_accomp=args.debug_accomp)
+                                      debug_harmony=args.debug_harmony, debug_accomp=args.debug_accomp,
+                                      progression_aware=args.progression_aware)
             print("Melody follow: C major, 4-beat history, minimum 2-beat chord hold. Ctrl+C stops.", flush=True)
             run_follow(follower, args.tempo, args.bars,
                        lambda: forward_pending(source, target, on_message=follower.receive), start=follower.start)
