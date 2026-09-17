@@ -91,6 +91,10 @@ class Follower:
             self.held_display = held
             self.next_held_report = now + 0.08
 
+        self.tick_accompaniment(beat)
+
+    def tick_accompaniment(self, beat):
+        """Play the selected harmony; input recognition is a separate concern."""
         boundary = int(beat)
         if boundary != self.last_beat:
             self.last_beat = boundary
@@ -132,12 +136,12 @@ class Follower:
                 self.debug_output.flush(self.current, beat)
 
 
-def run_follow(follower, tempo, bars, service):
+def run_follow(follower, tempo, bars, service, start=None):
     if not math.isfinite(tempo) or not 20 <= tempo <= 300:
         raise ValueError("Tempo must be between 20 and 300 BPM.")
     if bars < 0:
         raise ValueError("Bars must be >= 0 (0 means continuous).")
-    start = time.perf_counter()
+    start = time.perf_counter() if start is None else start
     try:
         while True:
             service()

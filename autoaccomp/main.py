@@ -10,6 +10,7 @@ from . import comping, walking_bass
 from .scheduler import Scheduler
 from .midi_io import list_ports, input_port, output_port, forward_pending
 from .follow import Follower, run_follow
+from .melody_follow import MelodyFollower
 
 
 def parser():
@@ -37,6 +38,16 @@ def parser():
     follow.add_argument("--no-comping", action="store_true")
     follow.add_argument("--debug-accomp", action="store_true",
                         help="Log sent accompaniment notes and emphasize chord changes")
+    melody = commands.add_parser("melody-follow", help="Estimate C-major harmony from a single-note melody")
+    melody.add_argument("--input", required=True)
+    melody.add_argument("--output", required=True)
+    melody.add_argument("--tempo", type=float, default=TEMPO)
+    melody.add_argument("--bars", type=int, default=0)
+    melody.add_argument("--key", choices=("C",), default="C")
+    melody.add_argument("--no-bass", action="store_true")
+    melody.add_argument("--no-comping", action="store_true")
+    melody.add_argument("--debug-harmony", action="store_true")
+    melody.add_argument("--debug-accomp", action="store_true")
     for name in ("monitor", "thru", "test-tone"):
         command = commands.add_parser(name)
         if name != "test-tone":
@@ -63,6 +74,9 @@ def main():
             return
         if args.command == "follow":
             follow_accompaniment(args)
+            return
+        if args.command == "melody-follow":
+            melody_accompaniment(args)
             return
         deadline = time.perf_counter() + args.seconds if args.seconds > 0 else float("inf")
         if args.command == "monitor":
@@ -130,6 +144,21 @@ def follow_accompaniment(args):
             print("Follow mode: play a chord. Changes apply on the next beat; Ctrl+C stops.", flush=True)
             run_follow(follower, args.tempo, args.bars,
                        lambda: forward_pending(source, target, on_message=follower.receive))
+            print(f"Late attacks skipped: {follower.scheduler.skipped}")
+
+
+def melody_accompaniment(args):
+    with output_port(args.output) as target:
+        with input_port(args.input) as source:
+            for channel in (MELODY_CHANNEL, COMP_CHANNEL):
+                target.send(mido.Message("program_change", channel=channel, program=0))
+            target.send(mido.Message("program_change", channel=BASS_CHANNEL, program=32))
+            follower = MelodyFollower(target, args.tempo, args.key, args.no_bass, args.no_comping,
+                                      report=lambda line: print(line, flush=True),
+                                      debug_harmony=args.debug_harmony, debug_accomp=args.debug_accomp)
+            print("Melody follow: C major, 4-beat history, minimum 2-beat chord hold. Ctrl+C stops.", flush=True)
+            run_follow(follower, args.tempo, args.bars,
+                       lambda: forward_pending(source, target, on_message=follower.receive), start=follower.start)
             print(f"Late attacks skipped: {follower.scheduler.skipped}")
 
 
