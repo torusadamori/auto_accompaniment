@@ -242,3 +242,17 @@
   play/follow/melody-follow、record/replay、UNO Qの回帰テストを含む。
 - 修正後の実鍵盤・聴感評価は未実施。60msの境界内に複数入力があれば、
   再開時に受信順で同時刻発音する場合がある。通常のgrid=0入力には追加遅延なし。
+
+## 方向別再配置・WinMM入力終了（2026-09-17）
+
+- INPUT_PAUSEの既定閾値を700msへ変更し、phrase-gap-msで調整可能にした。
+  UPの再配置帯域60〜72、DOWNは72〜84、SAMEは直前出力付近。指定音域に比例調整。
+  RANGE_LIMITの60ms境界も同じ方向別帯域を使用し、再開時コードへ吸着。
+- WinMM入力はフィルター・callback解除・キュー破棄・50ms待機後にclose/delete。
+  Midoのcallback=Noneによるcallback再登録を回避。既知エラーもnative破棄確認済みの場合のみ抑制。
+  is_port_openのfalseだけでは解放を認定しない。詳細と一次資料はLoopian手順書に記載。
+- 全187テスト中184件成功、既存環境依存3件スキップ。方向別pause、SAME維持、閾値設定、
+  既知の安全な終了・未確認エラー伝播・終了順序・重複close・キュー上限を検証。
+- 実MIDIFlex4 1 / Microsoft GS Wavetable Synth 0で1小節の起動終了が成功。
+  同じ実ポートで_thread.interrupt_mainによるCtrl+C相当の割り込み終了を3回実行し、全回エラーなし。
+  演奏入力なしの終了検証であり、元のエラーのドライバー内原因や演奏後の再発防止までは未確認。

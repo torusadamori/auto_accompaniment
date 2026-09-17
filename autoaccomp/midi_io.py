@@ -1,5 +1,6 @@
 """MIDI hardware boundary; musical generators do not import this module."""
 from contextlib import contextmanager
+import time
 import mido
 from .config import MELODY_CHANNEL
 
@@ -40,9 +41,56 @@ def output_port(value):
             port.panic()
 
 
+WINMM_UNPREPARE_ERROR = (
+    "MidiInWinMM::openPort: error closing Windows MM MIDI input port (midiInUnprepareHeader)."
+)
+
+
+def close_winmm_input(port):
+    """Shutdown adapter for the pinned Mido 1.3.3 / python-rtmidi 1.5.8 backend.
+
+    Do not use is_port_open() to prove cleanup: python-rtmidi clears its Python
+    port number BEFORE native closePort(), including on a failing native close.
+    """
+    if port.closed:
+        return
+    rt = port._rt
+    if rt.is_deleted:
+        port.closed = True
+        return
+    # Mido's callback=None setter re-registers its queue callback. Bypass that
+    # setter at shutdown; no consumer or scheduler runs while this function runs.
+    rt.ignore_types(sysex=True, timing=True, active_sense=True)
+    rt.cancel_callback()
+    for _ in range(4096):
+        if port.poll() is None:
+            break
+    time.sleep(0.05)  # Allow in-flight callbacks to finish; never in the play loop.
+    try:
+        rt.close_port()
+    except (OSError, RuntimeError) as error:
+        # Only proven completed disposal is harmless. The WinMM error text alone
+        # can also mean a buffer still belongs to the driver, which is NOT safe.
+        if str(error) != WINMM_UNPREPARE_ERROR or rt.is_deleted is not True:
+            raise
+    if not rt.is_deleted:
+        rt.delete()
+    port.closed = True
+
+
+@contextmanager
 def input_port(value):
     api = backend()
-    return api.open_input(resolve_port(value, api.get_input_names()))
+    port = api.open_input(resolve_port(value, api.get_input_names()))
+    from mido.backends.rtmidi import Input
+    if isinstance(port, Input) and port.api == "WINDOWS_MM":
+        try:
+            yield port
+        finally:
+            close_winmm_input(port)
+    else:
+        with port as source:
+            yield source
 
 
 def forward_pending(source, target=None, monitor=False, on_message=None):

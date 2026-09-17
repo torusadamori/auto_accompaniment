@@ -33,6 +33,8 @@ def parser():
     loopian.add_argument("--timing-strength", type=float, default=0.5)
     loopian.add_argument("--timing-window-ms", type=float, default=30)
     loopian.add_argument("--debug-loopian", action="store_true")
+    loopian.add_argument("--phrase-gap-ms", type=float, default=700,
+                        help="Input Note On gap that starts a new phrase (default: 700 ms)")
     recording = commands.add_parser("record-melody", help="Record timestamped MIDI input to JSON; Ctrl+C saves")
     recording.add_argument("--input", required=True)
     recording.add_argument("--output-file", required=True)

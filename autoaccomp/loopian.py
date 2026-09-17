@@ -99,36 +99,46 @@ class GestureAnalyzer:
 
 
 class PitchShaper:
-    PHRASE_PAUSE = 0.4
-
-    def __init__(self, low=48, high=96):
+    def __init__(self, low=48, high=96, phrase_gap=0.7):
+        if not math.isfinite(phrase_gap) or phrase_gap <= 0:
+            raise ValueError("Phrase gap must be finite and greater than zero.")
+        self.phrase_gap = phrase_gap
         self.low, self.high = low, high
         self.previous = None
         self.boundary_reason = None
+        self.rebase_zone = None
 
-    def rebase(self, candidates, allowed):
-        # A stable mid-register root starts a new phrase, with room in both directions.
+    def rebase(self, candidates, allowed, direction):
+        if direction == "SAME":
+            self.rebase_zone = "PREVIOUS"
+            return min(candidates, key=lambda n: (abs(n - self.previous), n))
         middle = (self.low + self.high) / 2
+        width = (self.high - self.low) / 4
+        zone_low, zone_high = ((middle - width, middle) if direction == "UP"
+                               else (middle, middle + width))
+        self.rebase_zone = "LOW_MID" if direction == "UP" else "HIGH_MID"
         interior = candidates[1:-1] or candidates
-        roots = [n for n in interior if n % 12 == allowed[0]]
-        chord_tones = [n for n in interior if n % 12 in allowed[:4]]
-        return min(roots or chord_tones or interior, key=lambda n: (abs(n - middle), n))
+        zone = [n for n in interior if zone_low <= n <= zone_high] or interior
+        chord_tones = [n for n in zone if n % 12 in allowed[:4]]
+        center = (zone_low + zone_high) / 2
+        return min(chord_tones or zone, key=lambda n: (abs(n - center), n))
 
     def choose(self, gesture, context, range_restart=False):
         self.boundary_reason = None
+        self.rebase_zone = None
         allowed = PALETTES[context.chord]
         candidates = [n for n in range(self.low, self.high + 1) if n % 12 in allowed]
         if range_restart:
             self.boundary_reason = "RANGE_LIMIT"
-            output = self.rebase(candidates, allowed)
+            output = self.rebase(candidates, allowed, gesture.direction)
         elif self.previous is None:
             # Begin near the authored melody register, independent of the input key.
             anchor = sum(context.melody_range) / 2
             chord_tones = [n for n in candidates if n % 12 in allowed[:4]]
             output = min(chord_tones or candidates, key=lambda n: (abs(n - anchor), n))
-        elif gesture.elapsed is not None and gesture.elapsed >= self.PHRASE_PAUSE:
+        elif gesture.elapsed is not None and gesture.elapsed >= self.phrase_gap:
             self.boundary_reason = "INPUT_PAUSE"
-            output = self.rebase(candidates, allowed)
+            output = self.rebase(candidates, allowed, gesture.direction)
         elif gesture.direction in ("UP", "DOWN"):
             sign = 1 if gesture.direction == "UP" else -1
             directional = [n for n in candidates if (n - self.previous) * sign > 0]
@@ -136,7 +146,7 @@ class PitchShaper:
                 output = min(directional, key=lambda n: abs(n - self.previous))
             else:
                 self.boundary_reason = "RANGE_LIMIT"
-                output = self.rebase(candidates, allowed)
+                output = self.rebase(candidates, allowed, gesture.direction)
         else:
             output = min(candidates, key=lambda n: (abs(n - self.previous), n))
         self.previous = output
@@ -187,10 +197,10 @@ class LoopianEngine:
     LIMIT = 4096
     PHRASE_GAP = 0.060
 
-    def __init__(self, target, song, timing=Timing(), report=None):
+    def __init__(self, target, song, timing=Timing(), report=None, phrase_gap=0.7):
         self.target, self.song, self.timing, self.report = target, song, timing, report
         self.gestures = GestureAnalyzer()
-        self.pitch = PitchShaper(*song.output_range)
+        self.pitch = PitchShaper(*song.output_range, phrase_gap=phrase_gap)
         self.held = defaultdict(deque)
         self.sounding = {}
         self.queue = []
@@ -284,7 +294,8 @@ class LoopianEngine:
             self.sounding[note] = voice
             if self.report:
                 g = voice.gesture
-                boundary = (f"Phrase boundary detected\nReason: {reason}\nPhrase rebase: {note_name(note)}\n"
+                boundary = (f"Phrase boundary detected\nReason: {reason}\nDirection: {g.direction}\n"
+                            f"Rebase zone: {self.pitch.rebase_zone}\nPhrase rebase: {note_name(note)}\n"
                             if reason else "")
                 self.report(f"Input note: {g.note}\nInterval: {g.interval:+d}\nDirection: {g.direction}\n"
                             f"Chord: {context.chord}; Next chord: {context.next_chord}; "
@@ -311,12 +322,15 @@ def run_loopian(args):
     song = FixedSong(tempo=args.tempo, chords=tuple(args.chords),
                      output_range=(args.note_min, args.note_max))
     timing = Timing(args.grid, args.timing_strength, args.timing_window_ms / 1000)
+    phrase_gap = args.phrase_gap_ms / 1000
+    PitchShaper(*song.output_range, phrase_gap=phrase_gap)  # Validate before opening hardware.
     if args.bars < 0:
         raise ValueError("Bars must be >= 0 (0 means continuous).")
     with output_port(args.output) as target, input_port(args.input) as source:
         target.send(mido.Message("program_change", program=0))
         engine = LoopianEngine(target, song, timing,
-                               (lambda line: print(line, flush=True)) if args.debug_loopian else None)
+                               (lambda line: print(line, flush=True)) if args.debug_loopian else None,
+                               phrase_gap=phrase_gap)
         print(f"Loopian ready: C major, 4/4, {song.tempo:g} BPM; input = gesture. Ctrl+C stops.", flush=True)
         start = time.perf_counter()
         last_bar = -1

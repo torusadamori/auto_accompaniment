@@ -44,13 +44,15 @@ MIDIファイル読み込みは未実装です。将来のローダーで拍単�
 - 既定音域はMIDI **48〜96**。`--range-low` / `--range-high` で変更でき、少なくとも1オクターブ幅が必要です。
   従来の範囲は `--range-low 55 --range-high 84`。旧名 `--note-min` / `--note-max` も使えます。
 - 方向側に候補がなくなったら **RANGE_LIMIT** のフレーズ境界です。単音のオクターブ折返しは行いません。
-  発音中の音とサステインを解放し、60ms後に中域の現在コードのルートから新しいフレーズを開始します。
-  再配置は範囲中央に近いルートを優先し、端しか選べない範囲では内部のコードトーンを使います。
-  Cmaj7の既定範囲なら `… B6 C7 → [区切り] C5 D5 E5 …`。55〜84なら `… B5 C6 → [区切り] C5 D5 …`。
+  発音中の音とサステインを解放し、60ms後に方向別の開始帯域から新しいフレーズを開始します。
+  UPはLOW_MID（既定音域で60〜72）、DOWNはHIGH_MID（72〜84）。帯域中央に近いコードトーンを優先し、なければ許可音から選びます。
+  指定音域の中央をM、幅の1/4をWとし、UPはM−W〜M、DOWNはM〜M＋Wへ比例調整します。音域端そのものは再配置候補から外します。
+  Cmaj7の既定範囲ならUPは `… B6 C7 → [区切り] G4 A4 B4 …`、DOWNは `… D3 C3 → [区切り] G5 E5 D5 …`。
   DOWNも同様に下限で区切り、中域から下降を再開します。再配置そのものには音域移動があり、方向維持はフレーズ内で保証します。
-- Note On間隔が **400ms以上** なら **INPUT_PAUSE** として同じ中域へ再配置します。この場合、追加の60ms待ちはありません。
+- Note On間隔が既定 **700ms以上** なら **INPUT_PAUSE** として再開入力の方向別帯域へ再配置します。この場合、追加の60ms待ちはありません。
+  `--phrase-gap-ms 400` / `600` / `800` など正の有限値で調整可能。SAMEなら帯域へ戻さず直前出力に最も近い許可音を保持します。
   大きな入力ジャンプ単独では再配置せず、例えば67→48も最寄りの下側の許可音へ1段進めます。
-- デバッグには `Phrase boundary detected`、`Reason: RANGE_LIMIT / INPUT_PAUSE`、`Phrase rebase: C5` などを表示します。
+- デバッグには `Phrase boundary detected`、`Reason: RANGE_LIMIT / INPUT_PAUSE`、`Direction`、`Rebase zone: LOW_MID / HIGH_MID / PREVIOUS`、`Phrase rebase` を表示します。
 
 ## タイミング
 
@@ -78,21 +80,37 @@ velocityとサステインCC64を保持します。CC120/123は予約音も含�
 イベントキュー/未解放入力はそれぞれ最大4096件で、超過は明示エラーと停止時解放。
 通常停止・Ctrl+C・例外で変換音を解放し、既存ポート処理でもreset/panicを実行します。
 
+### Windows MM入力の終了
+
+Loopianではキュー取消・Note Off → 入力close → 出力reset/panic/closeの順で終了します。
+Mido 1.3.3 / python-rtmidi 1.5.8（同梱RtMidi 5.0.0）のWindows MM入力には専用終了処理を適用します。
+受信フィルター設定 → native callback解除 → 最大4096件の受信キュー破棄 → 50ms待機 → native close → delete。
+Midoの `callback=None` setterはキュー用callbackを再登録するので、終了時は直接解除します。演奏中には待機を加えません。
+
+報告された `midiInUnprepareHeader` エラーの発生箇所はSysExバッファ解放です。
+文言のopenPortは[RtMidi 5.0.0のclosePort実装](https://github.com/thestk/rtmidi/blob/5.0.0/RtMidi.cpp#L2548)にある表記です。
+[Microsoftの仕様](https://learn.microsoft.com/en-us/windows/win32/api/mmeapi/nf-mmeapi-midiinunprepareheader)では、
+バッファがドライバーに残っている場合も失敗するため、文言だけで安全とは判断しません。
+完全なnativeオブジェクト破棄を `is_deleted` で確認できた既知の例外だけ正常終了扱いにします。
+`is_port_open()` はnative close前にPython側フラグが変わるため安全性の証明には使いません。
+その他のエラーや解放未確認の同エラーは伝播します。50ms待機は競合を減らす対策で、ドライバー内部の失敗原因を確定・解消したという保証ではありません。
+
 ## 実鍵盤テスト
 
 1. まずCmaj7を固定し、補正を切って起動します。
 
    ```powershell
-   .\.venv\Scripts\python.exe -m autoaccomp.main loopian --input "MIDIFlex4 1" --output "Microsoft GS Wavetable Synth 0" --tempo 120 --chords Cmaj7 --grid 0 --debug-loopian
+   .\.venv\Scripts\python.exe -m autoaccomp.main loopian --input "MIDIFlex4 1" --output "Microsoft GS Wavetable Synth 0" --tempo 120 --chords Cmaj7 --grid 0 --debug-loopian --phrase-gap-ms 700
    ```
 
-2. C4 D4 E4 F4 G4を単音で、Note On間隔400ms未満（例えば120 BPMの8分音符）で上昇。開始直後なら出力は **E4 G4 A4 B4 C5**。
+2. C4 D4 E4 F4 G4を単音で、Note On間隔700ms未満で上昇。開始直後なら出力は **E4 G4 A4 B4 C5**。
    鍵盤の別のオクターブから始めても、同じ上昇なら同じ出力です。
 3. 再起動してG4 F4 E4 D4 C4を下降。出力は **E4 D4 C4 B3 A3**。
    再起動しない場合は前回出力から続きます。同じ鍵を連打すると同音連打できます。
-4. 白鍵を低いところから高いところまで、400ms未満の間隔で長く上昇。上限では短い区切りと `RANGE_LIMIT` の表示の後、C5から新しい上昇を確認します。
+4. 白鍵を低いところから高いところまで、700ms未満の間隔で長く上昇。上限では短い区切りと `RANGE_LIMIT` の表示の後、LOW_MIDから新しい上昇を確認します。
    高いところから低いところへの下降も確認。`--range-low 55 --range-high 84` を追加すれば旧上限C6で再現比較できます。
-   500ms以上休んだ後は `INPUT_PAUSE` が表示され、中域で再開します。レガート・短いタップ・サステイン操作・Ctrl+Cで音が残らないことも確認してください。
+   約1秒休み、UP再開はLOW_MID、DOWN再開はHIGH_MID、SAMEは直前音付近になることを確認します。
+   レガート・短いタップ・サステイン操作・Ctrl+Cで音が残らず、終了エラーが出ないことも確認してください。
 5. 最初の起動コマンドで4小節進行へ戻します。同じ上昇/下降を繰り返し、2秒ごとのコード表示と出力音を確認します。
    特にCmaj7にないFがDm7/G7で候補になること、Dm7にないBがG7で候補になることを確認してください。
 6. `--grid 0`、既定1/16、`--grid 8` を比較。補正は小さいため、デバッグ時刻でも確認できます。
