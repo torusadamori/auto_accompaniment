@@ -20,6 +20,8 @@ PALETTES = {
     "G7": (7, 11, 2, 5, 9, 4),
 }
 DEFAULT_CHORDS = ("Cmaj7", "Dm7", "G7", "Cmaj7")
+PRIMARY = {chord: notes[:4] for chord, notes in PALETTES.items()}
+SECONDARY = {chord: notes[4:] for chord, notes in PALETTES.items()}
 
 
 @dataclass(frozen=True)
@@ -99,7 +101,13 @@ class GestureAnalyzer:
 
 
 class PitchShaper:
-    def __init__(self, low=48, high=96, phrase_gap=0.7):
+    def __init__(self, low=48, high=96, phrase_gap=0.7, tone_priority="chord"):
+        if tone_priority not in ("flat", "chord"):
+            raise ValueError("Tone priority must be flat or chord.")
+        self.tone_priority = tone_priority
+        self.last_chord = None
+        self.change_notes = 0
+        self.selection_reason = ""
         if not math.isfinite(phrase_gap) or phrase_gap <= 0:
             raise ValueError("Phrase gap must be finite and greater than zero.")
         self.phrase_gap = phrase_gap
@@ -107,6 +115,24 @@ class PitchShaper:
         self.previous = None
         self.boundary_reason = None
         self.rebase_zone = None
+
+    def phrase_note(self, candidates, allowed, anchor):
+        primary = [n for n in candidates if n % 12 in allowed[:4]]
+        # Register/distance first; prefer 3rd, 7th, root, 5th on ties.
+        identity = (allowed[1], allowed[3], allowed[0], allowed[2])
+        return min(primary or candidates,
+                   key=lambda n: (abs(n - anchor), identity.index(n % 12)
+                                  if n % 12 in identity else 4, n))
+
+    def scored_note(self, candidates, allowed, strong):
+        nearest = min(abs(n - self.previous) for n in candidates)
+        # Never buy chord colour with a leap larger than a fourth, unless
+        # even the nearest valid note is farther away (e.g. a custom range).
+        nearby = [n for n in candidates if abs(n - self.previous) <= max(5, nearest)]
+        penalty = 4 if strong else 1.5
+        return min(nearby, key=lambda n: (
+            abs(n - self.previous) + (0 if n % 12 in allowed[:4] else penalty),
+            n % 12 not in allowed[:4], abs(n - self.previous), n))
 
     def rebase(self, candidates, allowed, direction):
         if direction == "SAME":
@@ -121,12 +147,24 @@ class PitchShaper:
         zone = [n for n in interior if zone_low <= n <= zone_high] or interior
         chord_tones = [n for n in zone if n % 12 in allowed[:4]]
         center = (zone_low + zone_high) / 2
+        if self.tone_priority == "chord":
+            return self.phrase_note(zone, allowed, center)
         return min(chord_tones or zone, key=lambda n: (abs(n - center), n))
 
     def choose(self, gesture, context, range_restart=False):
         self.boundary_reason = None
         self.rebase_zone = None
         allowed = PALETTES[context.chord]
+        changed = self.last_chord is not None and self.last_chord != context.chord
+        if changed:
+            self.change_notes = 2
+        # Zero-based beats 0 and 2: first sixteenth-note window of beats 1/3.
+        strong_beat = any(0 <= context.beat - beat < 0.25 for beat in (0, 2))
+        strong = strong_beat or self.change_notes > 0
+        self.selection_reason = ("flat nearest" if self.tone_priority == "flat" else
+                                 "PRIMARY weighted + direction/distance; " +
+                                 ("chord change" if self.change_notes else
+                                  "strong beat" if strong_beat else "weak beat"))
         candidates = [n for n in range(self.low, self.high + 1) if n % 12 in allowed]
         if range_restart:
             self.boundary_reason = "RANGE_LIMIT"
@@ -136,6 +174,8 @@ class PitchShaper:
             anchor = sum(context.melody_range) / 2
             chord_tones = [n for n in candidates if n % 12 in allowed[:4]]
             output = min(chord_tones or candidates, key=lambda n: (abs(n - anchor), n))
+            if self.tone_priority == "chord":
+                output = self.phrase_note(candidates, allowed, anchor)
         elif gesture.elapsed is not None and gesture.elapsed >= self.phrase_gap:
             self.boundary_reason = "INPUT_PAUSE"
             output = self.rebase(candidates, allowed, gesture.direction)
@@ -144,11 +184,25 @@ class PitchShaper:
             directional = [n for n in candidates if (n - self.previous) * sign > 0]
             if directional:
                 output = min(directional, key=lambda n: abs(n - self.previous))
+                if self.tone_priority == "chord":
+                    output = self.scored_note(directional, allowed, strong)
             else:
                 self.boundary_reason = "RANGE_LIMIT"
                 output = self.rebase(candidates, allowed, gesture.direction)
         else:
             output = min(candidates, key=lambda n: (abs(n - self.previous), n))
+            if self.tone_priority == "chord" and self.change_notes:
+                output = self.scored_note(candidates, allowed, True)
+            else:
+                self.selection_reason = "SAME: preserve/nearest allowed"
+        if self.tone_priority == "chord" and (self.previous is None or self.boundary_reason):
+            self.selection_reason = "phrase PRIMARY + nearest register (3rd/7th/root/5th tie-break)"
+            if gesture.direction == "SAME" and self.previous is not None:
+                if self.change_notes:
+                    output = self.scored_note(candidates, allowed, True)
+                self.selection_reason = "SAME: preserve/nearest allowed; chord-change weighting only"
+        self.last_chord = context.chord
+        self.change_notes = max(0, self.change_notes - 1)
         self.previous = output
         return output
 
@@ -197,10 +251,10 @@ class LoopianEngine:
     LIMIT = 4096
     PHRASE_GAP = 0.060
 
-    def __init__(self, target, song, timing=Timing(), report=None, phrase_gap=0.7):
+    def __init__(self, target, song, timing=Timing(), report=None, phrase_gap=0.7, tone_priority="chord"):
         self.target, self.song, self.timing, self.report = target, song, timing, report
         self.gestures = GestureAnalyzer()
-        self.pitch = PitchShaper(*song.output_range, phrase_gap=phrase_gap)
+        self.pitch = PitchShaper(*song.output_range, phrase_gap=phrase_gap, tone_priority=tone_priority)
         self.held = defaultdict(deque)
         self.sounding = {}
         self.queue = []
@@ -265,6 +319,7 @@ class LoopianEngine:
                 continue
             context = self.song.at(now)  # Harmony at actual output, even across a bar boundary.
             previous = self.pitch.previous
+            harmony_state = self.pitch.last_chord, self.pitch.change_notes
             note = self.pitch.choose(voice.gesture, context, range_restart=voice.boundary_started)
             reason = self.pitch.boundary_reason
             if reason == "RANGE_LIMIT" and not voice.boundary_started:
@@ -275,6 +330,7 @@ class LoopianEngine:
                     del self.sounding[sounding]
                 self.restore_sustain = True
                 self.pitch.previous = previous
+                self.pitch.last_chord, self.pitch.change_notes = harmony_state
                 voice.boundary_started = True
                 voice.due = now + self.PHRASE_GAP
                 self.resume_at = voice.due
@@ -301,6 +357,8 @@ class LoopianEngine:
                             f"Chord: {context.chord}; Next chord: {context.next_chord}; "
                             f"Bar: {context.bar + 1}; Beat: {context.beat + 1:.3f}\n"
                             f"Previous output: {note_name(previous)}\n{boundary}Output note: {note} ({note_name(note)})\n"
+                            f"Role: {'PRIMARY chord-tone' if note % 12 in PRIMARY[context.chord] else 'SECONDARY tension'}\n"
+                            f"Tone priority: {self.pitch.tone_priority}; Selection: {self.pitch.selection_reason}\n"
                             f"Timing: input={voice.received:.4f}s scheduled={due:.4f}s actual={now:.4f}s")
 
     def close(self):
@@ -312,6 +370,8 @@ class LoopianEngine:
             del self.sounding[note]
         self.gestures = GestureAnalyzer()
         self.pitch.previous = None
+        self.pitch.last_chord = None
+        self.pitch.change_notes = 0
         self.last_due = 0
         self.resume_at = 0
         self.sustain = 0
@@ -323,14 +383,14 @@ def run_loopian(args):
                      output_range=(args.note_min, args.note_max))
     timing = Timing(args.grid, args.timing_strength, args.timing_window_ms / 1000)
     phrase_gap = args.phrase_gap_ms / 1000
-    PitchShaper(*song.output_range, phrase_gap=phrase_gap)  # Validate before opening hardware.
+    PitchShaper(*song.output_range, phrase_gap=phrase_gap, tone_priority=args.tone_priority)
     if args.bars < 0:
         raise ValueError("Bars must be >= 0 (0 means continuous).")
     with output_port(args.output) as target, input_port(args.input) as source:
         target.send(mido.Message("program_change", program=0))
         engine = LoopianEngine(target, song, timing,
                                (lambda line: print(line, flush=True)) if args.debug_loopian else None,
-                               phrase_gap=phrase_gap)
+                               phrase_gap=phrase_gap, tone_priority=args.tone_priority)
         print(f"Loopian ready: C major, 4/4, {song.tempo:g} BPM; input = gesture. Ctrl+C stops.", flush=True)
         start = time.perf_counter()
         last_bar = -1

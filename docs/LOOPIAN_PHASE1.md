@@ -31,27 +31,40 @@ MIDIファイル読み込みは未実装です。将来のローダーで拍単�
 
 ## 音程ルール
 
-| コード | 使用可能音（先頭4音がコードトーン） |
-|---|---|
-| Cmaj7 | C E G B D A |
-| Dm7 | D F A C E G |
-| G7 | G B D F A E |
+| コード | PRIMARY（コードトーン） | SECONDARY（補助音） |
+|---|---|---|
+| Cmaj7 | C E G B | D A |
+| Dm7 | D F A C | E G |
+| G7 | G B D F | A E |
+
+既定は `--tone-priority chord`。`--tone-priority flat` で従来のPhase 1と同じ音高列に戻せます。
+chordでは方向に合う候補に限定し、`距離（半音） + SECONDARYペナルティ` の最小値を選びます。
+ペナルティは通常1.5、強拍またはコード変更後の2音は4。同点はPRIMARY、距離、低い音の順で決定します。
+通常の移動候補は5半音以内に制限し、その範囲に許可音がないときだけ最寄り距離まで広げます。
+強拍はbeat 1/3の先頭0.25拍（16分音符幅）。実出力時刻で判定し、それ以外は弱拍です。
+例えばCmaj7のB4からDOWNなら、弱拍はA4、強拍はG4。E4からUPならG4です。
+
+コード変更は前回出力時のコード名と比較します。同じコードが続く小節では再発動しません。
+新コードで実際に出す2音を強く優先し、RANGE_LIMITの待機中の仮選音では音数を消費しません。
+STARTとUP/DOWN再配置はPRIMARYから帯域基準に近い音を選び、同距離なら3rd → 7th → Root → 5thを優先します。
+SAMEは休止後も基本維持し、コード変更後2音の間だけ近いPRIMARYへの移動を許します。
+デバッグには `Role: PRIMARY chord-tone / SECONDARY tension`、`Tone priority`、`Selection` を追加しています。
 
 - 最初は参照メロディ音域の中央に最も近いコードトーン。既定曲のCmaj7ではE4（64）。入力の絶対音高には依存しません。
 - 入力Note Onの差分からSTART / UP / DOWN / SAMEを判定。半音差と発音間隔も保持します。
-- UP/DOWNは前回出力の上側/下側にある、最も近い使用可能音へ1段進みます。入力の跳躍幅はPhase 1では出力の跳躍幅にしません。
-- 動いている入力で同音を続けません。SAMEは前回音が有効なら同音、コード変更で無効なら最寄りの有効音です。
+- UP/DOWNは前回出力の上側/下側だけを候補にします。flatは最寄り、chordは上記スコアで選びます。入力の跳躍幅はPhase 1では出力の跳躍幅にしません。
+- 動いている入力で同音を続けません。SAMEは前回音が有効なら同音、コード変更時は上記ルールを適用します。flatは最寄りの有効音です。
 - 既定音域はMIDI **48〜96**。`--range-low` / `--range-high` で変更でき、少なくとも1オクターブ幅が必要です。
   従来の範囲は `--range-low 55 --range-high 84`。旧名 `--note-min` / `--note-max` も使えます。
 - 方向側に候補がなくなったら **RANGE_LIMIT** のフレーズ境界です。単音のオクターブ折返しは行いません。
   発音中の音とサステインを解放し、60ms後に方向別の開始帯域から新しいフレーズを開始します。
   UPはLOW_MID（既定音域で60〜72）、DOWNはHIGH_MID（72〜84）。帯域中央に近いコードトーンを優先し、なければ許可音から選びます。
   指定音域の中央をM、幅の1/4をWとし、UPはM−W〜M、DOWNはM〜M＋Wへ比例調整します。音域端そのものは再配置候補から外します。
-  Cmaj7の既定範囲ならUPは `… B6 C7 → [区切り] G4 A4 B4 …`、DOWNは `… D3 C3 → [区切り] G5 E5 D5 …`。
+  flatでCmaj7の既定範囲ならUPは `… B6 C7 → [区切り] G4 A4 B4 …`、DOWNは `… D3 C3 → [区切り] G5 E5 D5 …`。
   DOWNも同様に下限で区切り、中域から下降を再開します。再配置そのものには音域移動があり、方向維持はフレーズ内で保証します。
 - Note On間隔が既定 **700ms以上** なら **INPUT_PAUSE** として再開入力の方向別帯域へ再配置します。この場合、追加の60ms待ちはありません。
   `--phrase-gap-ms 400` / `600` / `800` など正の有限値で調整可能。SAMEなら帯域へ戻さず直前出力に最も近い許可音を保持します。
-  大きな入力ジャンプ単独では再配置せず、例えば67→48も最寄りの下側の許可音へ1段進めます。
+  大きな入力ジャンプ単独では再配置せず、例えば67→48も下側の許可音へ進めます。
 - デバッグには `Phrase boundary detected`、`Reason: RANGE_LIMIT / INPUT_PAUSE`、`Direction`、`Rebase zone: LOW_MID / HIGH_MID / PREVIOUS`、`Phrase rebase` を表示します。
 
 ## タイミング
@@ -95,12 +108,24 @@ Midoの `callback=None` setterはキュー用callbackを再登録するので、
 `is_port_open()` はnative close前にPython側フラグが変わるため安全性の証明には使いません。
 その他のエラーや解放未確認の同エラーは伝播します。50ms待機は競合を減らす対策で、ドライバー内部の失敗原因を確定・解消したという保証ではありません。
 
-## 実鍵盤テスト
+## 実鍵盤A/B比較
+
+同じUP/DOWNジェスチャーを以下の順で比較します。各実行はCtrl+Cで終了します。
+
+```powershell
+.\.venv\Scripts\python.exe -m autoaccomp.main loopian --input "MIDIFlex4 1" --output "Microsoft GS Wavetable Synth 0" --tempo 120 --debug-loopian --grid 0 --phrase-gap-ms 700 --tone-priority flat
+.\.venv\Scripts\python.exe -m autoaccomp.main loopian --input "MIDIFlex4 1" --output "Microsoft GS Wavetable Synth 0" --tempo 120 --debug-loopian --grid 0 --phrase-gap-ms 700 --tone-priority chord
+```
+
+コード変更の色、G7のドミナント感、跳躍の自然さ、フレーズ内の方向維持を聴き比べてください。
+自動テストは方向と跳躍上限を検証しますが、聴感上の改善は実鍵盤で評価が必要です。
+
+## 従来方式（flat）の実鍵盤テスト
 
 1. まずCmaj7を固定し、補正を切って起動します。
 
    ```powershell
-   .\.venv\Scripts\python.exe -m autoaccomp.main loopian --input "MIDIFlex4 1" --output "Microsoft GS Wavetable Synth 0" --tempo 120 --chords Cmaj7 --grid 0 --debug-loopian --phrase-gap-ms 700
+   .\.venv\Scripts\python.exe -m autoaccomp.main loopian --input "MIDIFlex4 1" --output "Microsoft GS Wavetable Synth 0" --tempo 120 --chords Cmaj7 --grid 0 --debug-loopian --phrase-gap-ms 700 --tone-priority flat
    ```
 
 2. C4 D4 E4 F4 G4を単音で、Note On間隔700ms未満で上昇。開始直後なら出力は **E4 G4 A4 B4 C5**。
@@ -111,7 +136,7 @@ Midoの `callback=None` setterはキュー用callbackを再登録するので、
    高いところから低いところへの下降も確認。`--range-low 55 --range-high 84` を追加すれば旧上限C6で再現比較できます。
    約1秒休み、UP再開はLOW_MID、DOWN再開はHIGH_MID、SAMEは直前音付近になることを確認します。
    レガート・短いタップ・サステイン操作・Ctrl+Cで音が残らず、終了エラーが出ないことも確認してください。
-5. 最初の起動コマンドで4小節進行へ戻します。同じ上昇/下降を繰り返し、2秒ごとのコード表示と出力音を確認します。
+5. `--chords Cmaj7` を外して4小節進行へ戻します。同じ上昇/下降を繰り返し、2秒ごとのコード表示と出力音を確認します。
    特にCmaj7にないFがDm7/G7で候補になること、Dm7にないBがG7で候補になることを確認してください。
 6. `--grid 0`、既定1/16、`--grid 8` を比較。補正は小さいため、デバッグ時刻でも確認できます。
 

@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import mido
 
-from autoaccomp.loopian import (FixedSong, GestureAnalyzer, LoopianEngine, PALETTES,
+from autoaccomp.loopian import (FixedSong, Gesture, GestureAnalyzer, LoopianEngine, PALETTES, PRIMARY, SECONDARY,
                                PitchShaper, Timing)
 from autoaccomp.main import main, parser
 from test_melody_cli import Backend, Clock, Port
@@ -14,7 +14,7 @@ from test_melody_cli import Backend, Clock, Port
 
 class LoopianTests(unittest.TestCase):
     def phrase(self, inputs, chord="Cmaj7"):
-        analyzer, shaper = GestureAnalyzer(), PitchShaper()
+        analyzer, shaper = GestureAnalyzer(), PitchShaper(tone_priority="flat")
         context = FixedSong(chords=(chord,)).at(0)
         return [shaper.choose(analyzer.receive(n, i * 0.1), context) for i, n in enumerate(inputs)]
 
@@ -46,7 +46,7 @@ class LoopianTests(unittest.TestCase):
         for chord, allowed in PALETTES.items():
             for previous in range(55, 85):
                 for step in (-1, 1):
-                    analyzer, shaper = GestureAnalyzer(), PitchShaper(55, 84)
+                    analyzer, shaper = GestureAnalyzer(), PitchShaper(55, 84, tone_priority="flat")
                     analyzer.receive(60, 0)
                     shaper.previous = previous
                     output = shaper.choose(analyzer.receive(60 + step, 0.1), FixedSong(chords=(chord,)).at(0))
@@ -65,7 +65,7 @@ class LoopianTests(unittest.TestCase):
         for low, high in ((48, 96), (55, 84), (0, 12), (115, 127)):
             for chord in PALETTES:
                 for sign in (-1, 1):
-                    analyzer, shaper = GestureAnalyzer(), PitchShaper(low, high)
+                    analyzer, shaper = GestureAnalyzer(), PitchShaper(low, high, tone_priority="flat")
                     context = FixedSong(chords=(chord,), output_range=(low, high)).at(0)
                     boundaries = 0
                     for i in range(100):
@@ -82,7 +82,7 @@ class LoopianTests(unittest.TestCase):
                     self.assertGreater(boundaries, 0)
 
     def test_pause_restarts_middle_phrase_but_large_jump_is_direction_only(self):
-        analyzer, shaper = GestureAnalyzer(), PitchShaper()
+        analyzer, shaper = GestureAnalyzer(), PitchShaper(tone_priority="flat")
         context = FixedSong().at(0)
         self.assertEqual(shaper.choose(analyzer.receive(67, 0), context), 64)
         self.assertEqual(shaper.choose(analyzer.receive(48, 0.1), context), 62)
@@ -106,7 +106,7 @@ class LoopianTests(unittest.TestCase):
         for chord in PALETTES:
             for step, zone, limits in ((2, "LOW_MID", (60, 72)), (-19, "HIGH_MID", (72, 84)),
                                        (0, "PREVIOUS", (55, 57))):
-                analyzer, shaper = GestureAnalyzer(), PitchShaper()
+                analyzer, shaper = GestureAnalyzer(), PitchShaper(tone_priority="flat")
                 analyzer.receive(67, 0)
                 shaper.previous = 55
                 context = FixedSong(chords=(chord,)).at(0)
@@ -163,7 +163,7 @@ class LoopianTests(unittest.TestCase):
 
     def engine(self, timing=Timing(grid=0)):
         port = Port(Clock())
-        return LoopianEngine(port, FixedSong(), timing), port
+        return LoopianEngine(port, FixedSong(), timing, tone_priority="flat"), port
 
     def test_release_uses_transformed_note_and_velocity_zero(self):
         engine, port = self.engine()
@@ -226,7 +226,7 @@ class LoopianTests(unittest.TestCase):
         for previous, inputs, expected in ((84, (60, 62), (67, 69)), (55, (60, 58), (72, 71))):
             port, logs = Port(Clock()), []
             engine = LoopianEngine(port, FixedSong(chords=("Cmaj7",), output_range=(55, 84)),
-                                   Timing(grid=0), logs.append)
+                                   Timing(grid=0), logs.append, tone_priority="flat")
             engine.receive(mido.Message("note_on", note=inputs[0] - (2 if previous == 84 else -2)), 0)
             engine.tick(0)
             engine.pitch.previous = previous
@@ -307,6 +307,116 @@ class LoopianTests(unittest.TestCase):
         self.assertFalse(engine.queue or engine.held or engine.sounding)
 
 
+class ChordPriorityTests(unittest.TestCase):
+    def choose(self, previous, direction, chord="Cmaj7", beat=1, last=None,
+               elapsed=0.1, low=48, high=96):
+        shaper = PitchShaper(low, high)
+        shaper.previous = previous
+        shaper.last_chord = last or chord
+        context = FixedSong(chords=(chord,)).at(beat / 2)
+        note = shaper.choose(Gesture(60, 0, direction, elapsed), context)
+        return note, shaper
+
+    def test_definitions_and_cli_default(self):
+        self.assertEqual(PRIMARY, {"Cmaj7": (0, 4, 7, 11), "Dm7": (2, 5, 9, 0), "G7": (7, 11, 2, 5)})
+        self.assertEqual(SECONDARY, {"Cmaj7": (2, 9), "Dm7": (4, 7), "G7": (9, 4)})
+        self.assertEqual(parser().parse_args(["loopian", "--input", "x", "--output", "y"]).tone_priority, "chord")
+        with self.assertRaises(ValueError):
+            PitchShaper(tone_priority="unknown")
+
+    def test_cmaj7_up_down_prefer_primary(self):
+        self.assertEqual(self.choose(67, "UP", beat=0)[0], 71)  # skip A for B
+        self.assertEqual(self.choose(64, "DOWN", beat=0)[0], 60)  # skip D for C
+
+    def test_strong_beats_and_weak_secondary(self):
+        for beat in (0, 0.1, 2, 2.24):
+            self.assertEqual(self.choose(60, "DOWN", beat=beat, chord="Dm7")[0], 57)
+        for beat in (0.25, 1, 2.25, 3, 3.9):
+            self.assertEqual(self.choose(60, "DOWN", beat=beat, chord="Dm7")[0], 57)
+        # Cmaj7 B -> G costs four semitones downward; A costs two.
+        self.assertEqual(self.choose(71, "DOWN", beat=1)[0], 69)
+        for beat in (0, 2):
+            self.assertEqual(self.choose(71, "DOWN", beat=beat)[0], 67)
+
+    def test_start_and_rebase_primary_and_identity_tie(self):
+        for chord in PALETTES:
+            for direction in ("UP", "DOWN"):
+                note, shaper = self.choose(95 if direction == "UP" else 48,
+                                           direction, chord=chord, elapsed=1)
+                self.assertIn(note % 12, PRIMARY[chord])
+                self.assertEqual(shaper.rebase_zone, "LOW_MID" if direction == "UP" else "HIGH_MID")
+                note, shaper = self.choose(96 if direction == "UP" else 48,
+                                           direction, chord=chord)
+                self.assertEqual(shaper.boundary_reason, "RANGE_LIMIT")
+                self.assertIn(note % 12, PRIMARY[chord])
+        self.assertEqual(self.choose(None, "START", chord="Dm7")[0], 65)
+        # D4/F4 are equidistant from this authored register; choose the third.
+        context = FixedSong(chords=("Dm7",), melody=()).at(0)
+        from dataclasses import replace
+        context = replace(context, melody_range=(62, 65))
+        self.assertEqual(PitchShaper().choose(Gesture(60, 0, "START", None), context), 65)
+
+    def test_change_emphasizes_two_notes_then_expires(self):
+        for old, chord, previous in (("Cmaj7", "Dm7", 69), ("Dm7", "G7", 71), ("G7", "Cmaj7", 71)):
+            note, shaper = self.choose(previous, "DOWN", chord=chord, last=old)
+            self.assertIn(note % 12, PRIMARY[chord])
+            self.assertEqual(shaper.change_notes, 1)
+            shaper.previous = previous
+            context = FixedSong(chords=(chord,)).at(0.5)
+            note = shaper.choose(Gesture(60, -1, "DOWN", 0.1), context)
+            self.assertIn(note % 12, PRIMARY[chord])
+            self.assertEqual(shaper.change_notes, 0)
+        self.assertEqual(shaper.choose(Gesture(60, 0, "SAME", 0.1), context), note)
+        shaper.previous = 71
+        self.assertEqual(shaper.choose(Gesture(60, -1, "DOWN", 0.1), context), 69)
+
+    def test_same_holds_except_change_even_after_pause(self):
+        for elapsed in (0.1, 1):
+            for previous in (64, 62, 69):
+                self.assertEqual(self.choose(previous, "SAME", elapsed=elapsed)[0], previous)
+            note, _ = self.choose(64, "SAME", chord="Dm7", last="Cmaj7", elapsed=elapsed)
+            self.assertEqual(note, 65)
+
+    def test_direction_and_leap_bound_exhaustive(self):
+        for chord, allowed in PALETTES.items():
+            for low, high in ((48, 96), (0, 12), (115, 127)):
+                for previous in range(low, high + 1):
+                    for sign, direction in ((1, "UP"), (-1, "DOWN")):
+                        for beat in (0, 1, 2, 3):
+                            note, shaper = self.choose(previous, direction, chord, beat,
+                                                      last="G7" if chord != "G7" else "Dm7",
+                                                      low=low, high=high)
+                            valid = [n for n in range(low, high + 1) if n % 12 in allowed and (n - previous) * sign > 0]
+                            self.assertIn(note % 12, allowed)
+                            self.assertTrue(low <= note <= high)
+                            if valid:
+                                self.assertGreater((note - previous) * sign, 0)
+                                self.assertLessEqual(abs(note - previous), max(5, min(abs(n - previous) for n in valid)))
+                                self.assertIsNone(shaper.boundary_reason)
+                            else:
+                                self.assertEqual(shaper.boundary_reason, "RANGE_LIMIT")
+        # Only secondary fits in the requested direction at this range edge.
+        self.assertEqual(self.choose(60, "UP", chord="Dm7", low=50, high=64)[0], 62)
+        self.assertEqual(self.choose(62, "UP", chord="Dm7", low=50, high=64)[0], 64)
+
+    def test_deferred_boundary_counts_only_emitted_notes_and_reset(self):
+        port = Port(Clock())
+        engine = LoopianEngine(port, FixedSong(), Timing(grid=0))
+        engine.pitch.previous = 96
+        engine.pitch.last_chord = "Cmaj7"
+        engine.gestures.receive(60, 1.9)
+        engine.receive(mido.Message("note_on", note=62), 2.01)
+        engine.tick(2.01)
+        self.assertEqual(engine.pitch.last_chord, "Cmaj7")
+        self.assertEqual(engine.pitch.change_notes, 0)
+        engine.tick(2.08)
+        self.assertIn(port.messages[-1].note % 12, PRIMARY["Dm7"])
+        self.assertEqual(engine.pitch.change_notes, 1)
+        engine.close()
+        self.assertIsNone(engine.pitch.last_chord)
+        self.assertEqual(engine.pitch.change_notes, 0)
+
+
 class LoopianCliTests(unittest.TestCase):
     def exercise(self, flags=(), interrupt=False):
         clock = Clock()
@@ -315,7 +425,7 @@ class LoopianCliTests(unittest.TestCase):
             source.events.extend([(i + 0.01, mido.Message("note_on", note=note, velocity=83)),
                                   (i + 0.31, mido.Message("note_off", note=note))])
         logs = io.StringIO()
-        argv = ["autoaccomp", "loopian", "--input", "Keyboard", "--output", "Synth", "--bars", "4", *flags]
+        argv = ["autoaccomp", "loopian", "--input", "Keyboard", "--output", "Synth", "--bars", "4", "--tone-priority", "flat", *flags]
 
         def sleep(seconds):
             if interrupt and clock.now > 0.1:
@@ -341,6 +451,15 @@ class LoopianCliTests(unittest.TestCase):
                      "Input note: 60", "Output note: 64 (E4)", "Bar 2: Dm7", "Bar 3: G7", "actual="):
             self.assertIn(text, log)
         self.assertIn("Reason: INPUT_PAUSE", log)
+
+    def test_chord_cli_debug_and_cleanup(self):
+        source, target, log = self.exercise(["--tone-priority", "chord", "--debug-loopian"])
+        self.assertTrue(source.closed and target.closed)
+        self.assertIn("Tone priority: chord", log)
+        self.assertIn("Role: PRIMARY chord-tone", log)
+        self.assertIn("Selection:", log)
+        self.assertEqual(sum(m.type == "note_on" for m in target.messages), 8)
+        self.assertEqual(sum(m.type == "note_off" for m in target.messages), 8)
 
     def test_fixed_chord_and_no_debug(self):
         _, _, log = self.exercise(["--chords", "Cmaj7", "--grid", "0"])
