@@ -1,5 +1,8 @@
 # Loopian Phase 2 — MIDIメロディを手で進める
 
+素材位置周辺の探索と弱い変奏を加えた `melody-flow` は [Phase 3](LOOPIAN_PHASE3.md) を参照してください。
+この文書のdirect / transformは従来のまま利用できます。
+
 既存MIDIは演奏素材です。入力がなければ発音もメロディ位置の進行もありません。
 velocityが正のNote Onを1回受けるたびに、素材をちょうど1音消費します。
 Note Offとvelocity=0のNote Onは音を解放するだけです。

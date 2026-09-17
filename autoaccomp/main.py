@@ -28,8 +28,11 @@ def parser():
     loopian.add_argument("--midi-file", help="SMF melody material; never automatically played")
     loopian.add_argument("--melody-track", type=int, help="Zero-based MIDI track index")
     loopian.add_argument("--melody-channel", type=int, choices=range(1, 17), help="MIDI channel 1..16")
-    loopian.add_argument("--loopian-mode", choices=("gesture", "melody-direct", "melody-transform"),
+    loopian.add_argument("--loopian-mode", choices=("gesture", "melody-direct", "melody-transform", "melody-flow"),
                         help="Default: melody-transform with MIDI, gesture without MIDI")
+    loopian.add_argument("--flow-window", type=int, default=3, help="FLOW source radius, 1..8 notes (default: 3)")
+    loopian.add_argument("--flow-strength", type=float, default=0.5, help="FLOW variation 0..1; 0 matches transform")
+    loopian.add_argument("--seed", type=int, help="Reproducible FLOW variation; omitted = fresh local seed")
     loopian.add_argument("--bars", type=int, default=0)
     loopian.add_argument("--chords", nargs="+", choices=("Cmaj7", "Dm7", "G7"),
                         help="Override MIDI chord markers with a repeating one-chord-per-bar progression")

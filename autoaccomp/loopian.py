@@ -14,6 +14,7 @@ import mido
 
 from .midi_io import input_port, output_port
 from .midi_melody import MidiMelody, load_melody
+from .loopian_flow import FlowSelector
 
 
 PALETTES = {
@@ -310,6 +311,7 @@ class Voice:
     released: float | None = None
     boundary_started: bool = False
     melody_position: int | None = None
+    attack_order: int | None = None
 
 
 def note_name(note):
@@ -322,14 +324,17 @@ class LoopianEngine:
     PHRASE_GAP = 0.060
 
     def __init__(self, target, song, timing=Timing(), report=None, phrase_gap=0.7, tone_priority="chord",
-                 mode="gesture"):
-        if mode not in ("gesture", "melody-direct", "melody-transform"):
+                 mode="gesture", flow_window=3, flow_strength=0.5, seed=None):
+        if mode not in ("gesture", "melody-direct", "melody-transform", "melody-flow"):
             raise ValueError("Unknown Loopian mode.")
         if mode != "gesture" and not isinstance(song, MidiSong):
             raise ValueError("Melody modes require --midi-file.")
         if mode == "gesture" and isinstance(song, MidiSong):
-            raise ValueError("MIDI material requires melody-direct or melody-transform mode.")
+            raise ValueError("MIDI material requires a melody mode.")
         self.mode = mode
+        self.flow = FlowSelector(flow_window, flow_strength, seed) if mode == "melody-flow" else None
+        # Zero strength takes the unchanged Phase 2 path, including queue reservations.
+        self.flow_active = self.flow is not None and self.flow.amount > 0
         self.melody_position = 0
         self.target, self.song, self.timing, self.report = target, song, timing, report
         self.gestures = GestureAnalyzer()
@@ -347,7 +352,10 @@ class LoopianEngine:
         if len(self.queue) >= self.LIMIT:
             raise RuntimeError("Loopian event queue full; stopping and releasing notes.")
         self.sequence += 1
-        heapq.heappush(self.queue, (due, self.sequence, kind, voice, velocity))
+        if kind == "on" and voice.attack_order is None:
+            voice.attack_order = self.sequence
+        order = voice.attack_order if kind == "on" else self.sequence
+        heapq.heappush(self.queue, (due, order, self.sequence, kind, voice, velocity))
 
     def receive(self, message, now):
         if message.type == "control_change":
@@ -366,7 +374,9 @@ class LoopianEngine:
                 raise RuntimeError("Loopian held-note limit reached; stopping and releasing notes.")
             position = self.melody_position if self.mode != "gesture" else None
             tempo = self.song.context_for(position).tempo if position is not None else self.song.tempo
-            due = max(self.last_due, self.timing.due(now, tempo))
+            if self.flow_active:
+                position = None  # Resolve FLOW position in output order, after earlier choices.
+            due = max(self.last_due, self.resume_at, self.timing.due(now, tempo))
             self.last_due = due  # Do not reorder a rapid gesture around a grid edge.
             voice = Voice(self.gestures.receive(message.note, now), message.velocity, now, due,
                           melody_position=position)
@@ -385,7 +395,7 @@ class LoopianEngine:
 
     def tick(self, now):
         while self.queue and self.queue[0][0] <= now:
-            due, _, kind, voice, velocity = heapq.heappop(self.queue)
+            due, _, _, kind, voice, velocity = heapq.heappop(self.queue)
             if kind == "off":
                 # A range boundary may have deferred an already queued short tap.
                 release_due = max(voice.due + 0.001,
@@ -397,19 +407,29 @@ class LoopianEngine:
                     self.target.send(mido.Message("note_off", note=voice.note, velocity=velocity))
                     del self.sounding[voice.note]
                 continue
-            if now < self.resume_at:
+            if due < self.resume_at:
+                # Even if tick arrives after the gap, older pending attacks must
+                # move behind the boundary's first attack, in received order.
                 voice.due = self.resume_at
                 self.schedule(voice.due, "on", voice)
                 continue
-            material = None
-            if voice.melody_position is not None:
+            material, selection = None, None
+            previous = self.pitch.previous
+            harmony_state = self.pitch.last_chord, self.pitch.change_notes
+            if self.flow_active:
+                selection = self.flow.select(self.pitch, self.song, voice.gesture, self.melody_position,
+                                             PALETTES, range_restart=voice.boundary_started)
+                context = selection.context
+                material = self.song.melody[selection.selected.position % len(self.song.melody)]
+            elif voice.melody_position is not None:
                 context = self.song.context_for(voice.melody_position)
                 material = self.song.melody[voice.melody_position % len(self.song.melody)]
             else:
                 context = self.song.at(now)  # Phase 1 harmony follows actual output time.
-            previous = self.pitch.previous
-            harmony_state = self.pitch.last_chord, self.pitch.change_notes
-            if self.mode == "melody-direct":
+            if selection is not None:
+                self.pitch = selection.pitch
+                note = selection.selected.note
+            elif self.mode == "melody-direct":
                 note = material.note
                 self.pitch.previous = note
                 self.pitch.boundary_reason = None
@@ -442,6 +462,10 @@ class LoopianEngine:
             if note in self.sounding:
                 self.target.send(mido.Message("note_off", note=note))
             self.target.send(mido.Message("note_on", note=note, velocity=voice.velocity))
+            if selection is not None:
+                voice.melody_position = selection.selected.position
+                self.melody_position = selection.next_position
+                self.flow.commit(selection, voice.gesture.direction)
             voice.note = note
             self.sounding[note] = voice
             if self.report:
@@ -458,7 +482,9 @@ class LoopianEngine:
                 boundary = (f"Phrase boundary detected\nReason: {reason}\nDirection: {g.direction}\n"
                             f"Rebase zone: {self.pitch.rebase_zone}\nPhrase rebase: {note_name(note)}\n"
                             if reason else "")
-                self.report(f"{melody_debug}Input note: {g.note}\nInterval: {g.interval:+d}\nDirection: {g.direction}\n"
+                flow_debug = (self.flow.debug(selection, self.song, note_name) if selection is not None else
+                              "FLOW amount=0: exact melody-transform path\n" if self.flow is not None else "")
+                self.report(f"{flow_debug}{melody_debug}Input note: {g.note}\nInterval: {g.interval:+d}\nDirection: {g.direction}\n"
                             f"Chord: {context.chord}; Next chord: {context.next_chord}; "
                             f"Bar: {context.bar + 1}; Beat: {context.beat + 1:.3f}\n"
                             f"Previous output: {note_name(previous)}\n{boundary}Output note: {note} ({note_name(note)})\n"
@@ -478,6 +504,8 @@ class LoopianEngine:
         self.pitch.last_chord = None
         self.pitch.change_notes = 0
         self.melody_position = 0
+        if self.flow is not None:
+            self.flow.reset()
         self.last_due = 0
         self.resume_at = 0
         self.sustain = 0
@@ -488,7 +516,7 @@ def run_loopian(args):
     mode = args.loopian_mode or ("melody-transform" if args.midi_file else "gesture")
     if args.midi_file:
         if mode == "gesture":
-            raise ValueError("--midi-file requires melody-direct or melody-transform mode.")
+            raise ValueError("--midi-file requires a melody mode.")
         song = MidiSong(load_melody(args.midi_file, args.melody_track, args.melody_channel),
                        tuple(args.chords) if args.chords is not None else None, args.tempo,
                        (args.note_min, args.note_max))
@@ -502,17 +530,21 @@ def run_loopian(args):
     timing = Timing(grid, args.timing_strength, args.timing_window_ms / 1000)
     phrase_gap = args.phrase_gap_ms / 1000
     PitchShaper(*song.output_range, phrase_gap=phrase_gap, tone_priority=args.tone_priority)
+    if mode == "melody-flow":
+        FlowSelector(args.flow_window, args.flow_strength, args.seed)  # Validate before opening ports.
     if args.bars < 0:
         raise ValueError("Bars must be >= 0 (0 means continuous).")
     with output_port(args.output) as target, input_port(args.input) as source:
         target.send(mido.Message("program_change", program=0))
         engine = LoopianEngine(target, song, timing,
                                (lambda line: print(line, flush=True)) if args.debug_loopian else None,
-                               phrase_gap=phrase_gap, tone_priority=args.tone_priority, mode=mode)
+                               phrase_gap=phrase_gap, tone_priority=args.tone_priority, mode=mode,
+                               flow_window=args.flow_window, flow_strength=args.flow_strength, seed=args.seed)
         print(f"Loopian ready: {mode}, C major, 4/4, {song.tempo:g} BPM; grid={grid}. Ctrl+C stops.", flush=True)
         if args.midi_file:
+            stepping = "FLOW local search" if engine.flow_active else "one Note On = one step"
             print(f"MIDI material: {len(song.melody)} notes; tracks={song.source.tracks}; "
-                  "one Note On = one step; repeats at end; harmony follows source position.", flush=True)
+                  f"{stepping}; repeats at end; harmony follows source position.", flush=True)
         start = time.perf_counter()
         last_bar = -1
         try:
