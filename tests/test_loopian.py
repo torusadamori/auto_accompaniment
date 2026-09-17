@@ -8,7 +8,7 @@ import mido
 
 from autoaccomp.loopian import (FixedSong, GestureAnalyzer, LoopianEngine, PALETTES,
                                PitchShaper, Timing)
-from autoaccomp.main import main
+from autoaccomp.main import main, parser
 from test_melody_cli import Backend, Clock, Port
 
 
@@ -42,11 +42,11 @@ class LoopianTests(unittest.TestCase):
         self.assertEqual(analyzer.receive(62, 0.4).direction, "SAME")
         self.assertEqual(self.phrase([60, 60, 60]), [64, 64, 64])
 
-    def test_every_previous_note_chord_direction_and_octave_fold(self):
+    def test_every_previous_note_chord_direction_and_phrase_rebase(self):
         for chord, allowed in PALETTES.items():
             for previous in range(55, 85):
                 for step in (-1, 1):
-                    analyzer, shaper = GestureAnalyzer(), PitchShaper()
+                    analyzer, shaper = GestureAnalyzer(), PitchShaper(55, 84)
                     analyzer.receive(60, 0)
                     shaper.previous = previous
                     output = shaper.choose(analyzer.receive(60 + step, 0.1), FixedSong(chords=(chord,)).at(0))
@@ -56,7 +56,50 @@ class LoopianTests(unittest.TestCase):
                     directional = [n for n in range(55, 85) if n % 12 in allowed and (n - previous) * step > 0]
                     if directional:
                         self.assertEqual(output, min(directional, key=lambda n: abs(n - previous)))
-        self.assertEqual(self.phrase(list(range(60, 90)))[-1] % 12 in PALETTES["Cmaj7"], True)
+                        self.assertIsNone(shaper.boundary_reason)
+                    else:
+                        self.assertEqual(shaper.boundary_reason, "RANGE_LIMIT")
+                        self.assertTrue(60 <= output <= 76)
+
+    def test_long_phrases_only_reverse_at_explicit_boundary_all_chords_and_ranges(self):
+        for low, high in ((48, 96), (55, 84), (0, 12), (115, 127)):
+            for chord in PALETTES:
+                for sign in (-1, 1):
+                    analyzer, shaper = GestureAnalyzer(), PitchShaper(low, high)
+                    context = FixedSong(chords=(chord,), output_range=(low, high)).at(0)
+                    boundaries = 0
+                    for i in range(100):
+                        previous = shaper.previous
+                        note = shaper.choose(analyzer.receive(i if sign > 0 else 127 - i, i * 0.1), context)
+                        self.assertTrue(low <= note <= high)
+                        self.assertIn(note % 12, PALETTES[chord])
+                        if shaper.boundary_reason:
+                            boundaries += 1
+                            self.assertEqual(shaper.boundary_reason, "RANGE_LIMIT")
+                            self.assertNotIn(note, (low, high))
+                        elif previous is not None:
+                            self.assertGreater((note - previous) * sign, 0)
+                    self.assertGreater(boundaries, 0)
+
+    def test_pause_restarts_middle_phrase_but_large_jump_is_direction_only(self):
+        analyzer, shaper = GestureAnalyzer(), PitchShaper()
+        context = FixedSong().at(0)
+        self.assertEqual(shaper.choose(analyzer.receive(67, 0), context), 64)
+        self.assertEqual(shaper.choose(analyzer.receive(48, 0.1), context), 62)
+        self.assertIsNone(shaper.boundary_reason)
+        self.assertEqual(shaper.choose(analyzer.receive(49, 0.6), context), 72)
+        self.assertEqual(shaper.boundary_reason, "INPUT_PAUSE")
+        self.assertEqual(shaper.choose(analyzer.receive(50, 0.7), context), 74)
+        self.assertIsNone(shaper.boundary_reason)
+
+    def test_cli_range_defaults_and_legacy_aliases(self):
+        args = ["loopian", "--input", "Keyboard", "--output", "Synth"]
+        default = parser().parse_args(args)
+        self.assertEqual((default.note_min, default.note_max), (48, 96))
+        self.assertEqual(FixedSong().output_range, (48, 96))
+        for low, high in (("--range-low", "--range-high"), ("--note-min", "--note-max")):
+            parsed = parser().parse_args(args + [low, "55", high, "84"])
+            self.assertEqual((parsed.note_min, parsed.note_max), (55, 84))
 
     def test_timing_is_causal_light_bounded_and_switchable(self):
         self.assertAlmostEqual(Timing().due(0.110, 120), 0.1175)
@@ -139,10 +182,68 @@ class LoopianTests(unittest.TestCase):
         engine.tick(1)
         self.assertFalse(port.messages)
         engine.pitch.previous = 64
-        engine.gestures.receive(60, 1)
+        engine.gestures.receive(60, 1.9)
         engine.receive(mido.Message("note_on", note=62), 1.99)
         engine.tick(2.001)
         self.assertEqual(port.messages[-1].note, 65)  # Dm7 F, not Cmaj7 G
+
+    def test_range_boundary_has_real_gap_keeps_fast_gesture_order_and_short_releases(self):
+        for previous, inputs, expected in ((84, (60, 62), (72, 74)), (55, (60, 58), (72, 71))):
+            port, logs = Port(Clock()), []
+            engine = LoopianEngine(port, FixedSong(chords=("Cmaj7",), output_range=(55, 84)),
+                                   Timing(grid=0), logs.append)
+            engine.receive(mido.Message("note_on", note=inputs[0] - (2 if previous == 84 else -2)), 0)
+            engine.tick(0)
+            engine.pitch.previous = previous
+            engine.receive(mido.Message("control_change", control=64, value=127), 0.05)
+            before = len(port.messages)
+            engine.receive(mido.Message("note_on", note=inputs[0]), 0.1)
+            engine.tick(0.1)
+            self.assertEqual([m.type for m in port.messages[before:]], ["control_change", "note_off"])
+            self.assertEqual(port.messages[before].value, 0)
+            engine.receive(mido.Message("note_off", note=inputs[0]), 0.105)
+            engine.receive(mido.Message("note_on", note=inputs[1]), 0.11)
+            engine.tick(0.11)
+            engine.receive(mido.Message("note_off", note=inputs[1]), 0.115)
+            engine.tick(0.159)
+            self.assertFalse(any(m.type == "note_on" for m in port.messages[before:]))
+            engine.tick(0.160)
+            self.assertEqual([m.note for m in port.messages[before:] if m.type == "note_on"], list(expected))
+            self.assertTrue(any(m.type == "control_change" and m.value == 127 for m in port.messages[before:]))
+            engine.tick(0.18)
+            self.assertFalse(engine.sounding)
+            engine.close()
+            self.assertFalse(engine.queue or engine.held)
+            log = "\n".join(logs)
+            self.assertIn("Reason: RANGE_LIMIT", log)
+            self.assertIn("Phrase rebase: C5", log)
+            self.assertIn("Phrase gap: 60ms", log)
+
+    def test_boundary_recomputes_chord_after_gap_and_shutdown_cancels_restart(self):
+        engine, port = self.engine()
+        engine.pitch.previous = 96
+        engine.gestures.receive(60, 1.9)
+        engine.receive(mido.Message("note_on", note=62), 1.98)
+        engine.tick(1.98)
+        engine.tick(2.041)
+        self.assertEqual(port.messages[-1].note, 74)  # Dm7 root, not the earlier C root
+        engine.pitch.previous = 96
+        engine.receive(mido.Message("note_on", note=64), 2.1)
+        engine.tick(2.1)
+        engine.close()
+        count = len(port.messages)
+        engine.tick(3)
+        self.assertEqual(len(port.messages), count)
+        self.assertFalse(engine.queue or engine.held or engine.sounding)
+        # A new chord can add a higher pitch; an already-started boundary must
+        # still rebase rather than silently resuming at that new ceiling pitch.
+        engine.pitch.previous = 95
+        engine.gestures.receive(60, 5.9)
+        engine.receive(mido.Message("note_on", note=62), 5.98)
+        engine.tick(5.98)  # G7 ceiling B6
+        engine.tick(6.041)  # Cmaj7 now permits C7, but the new phrase begins at C5
+        self.assertEqual(port.messages[-1].note, 72)
+        engine.close()
 
     def test_controls_cleanup_pending_cancellation_and_ignored_raw_pitch(self):
         engine, port = self.engine(Timing())
@@ -198,12 +299,13 @@ class LoopianCliTests(unittest.TestCase):
         attacks = [m for m in target.messages if m.type == "note_on"]
         releases = [m for m in target.messages if m.type == "note_off"]
         self.assertEqual(len(attacks), 8)
-        self.assertEqual([m.note for m in attacks], [64, 67, 69, 72, 74, 71, 69, 67])
+        self.assertEqual([m.note for m in attacks], [64, 72, 74, 74, 67, 67, 72, 72])
         self.assertEqual([m.note for m in attacks], [m.note for m in releases])
         self.assertTrue(all(m.channel == 0 for m in target.messages))
         for text in ("Direction: START", "Interval: +2", "Direction: UP", "Direction: DOWN",
                      "Input note: 60", "Output note: 64 (E4)", "Bar 2: Dm7", "Bar 3: G7", "actual="):
             self.assertIn(text, log)
+        self.assertIn("Reason: INPUT_PAUSE", log)
 
     def test_fixed_chord_and_no_debug(self):
         _, _, log = self.exercise(["--chords", "Cmaj7", "--grid", "0"])

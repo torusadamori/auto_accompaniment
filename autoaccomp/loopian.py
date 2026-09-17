@@ -53,7 +53,7 @@ class FixedSong:
         MelodyNote(8, 2, 67), MelodyNote(10, 2, 65),
         MelodyNote(12, 2, 64), MelodyNote(14, 2, 60),
     )
-    output_range: tuple = (55, 84)
+    output_range: tuple = (48, 96)
 
     def __post_init__(self):
         if not math.isfinite(self.tempo) or not 20 <= self.tempo <= 300:
@@ -99,32 +99,44 @@ class GestureAnalyzer:
 
 
 class PitchShaper:
-    def __init__(self, low=55, high=84):
+    PHRASE_PAUSE = 0.4
+
+    def __init__(self, low=48, high=96):
         self.low, self.high = low, high
         self.previous = None
+        self.boundary_reason = None
 
-    def choose(self, gesture, context):
+    def rebase(self, candidates, allowed):
+        # A stable mid-register root starts a new phrase, with room in both directions.
+        middle = (self.low + self.high) / 2
+        interior = candidates[1:-1] or candidates
+        roots = [n for n in interior if n % 12 == allowed[0]]
+        chord_tones = [n for n in interior if n % 12 in allowed[:4]]
+        return min(roots or chord_tones or interior, key=lambda n: (abs(n - middle), n))
+
+    def choose(self, gesture, context, range_restart=False):
+        self.boundary_reason = None
         allowed = PALETTES[context.chord]
         candidates = [n for n in range(self.low, self.high + 1) if n % 12 in allowed]
-        if self.previous is None:
+        if range_restart:
+            self.boundary_reason = "RANGE_LIMIT"
+            output = self.rebase(candidates, allowed)
+        elif self.previous is None:
             # Begin near the authored melody register, independent of the input key.
             anchor = sum(context.melody_range) / 2
             chord_tones = [n for n in candidates if n % 12 in allowed[:4]]
             output = min(chord_tones or candidates, key=lambda n: (abs(n - anchor), n))
+        elif gesture.elapsed is not None and gesture.elapsed >= self.PHRASE_PAUSE:
+            self.boundary_reason = "INPUT_PAUSE"
+            output = self.rebase(candidates, allowed)
         elif gesture.direction in ("UP", "DOWN"):
             sign = 1 if gesture.direction == "UP" else -1
             directional = [n for n in candidates if (n - self.previous) * sign > 0]
             if directional:
                 output = min(directional, key=lambda n: abs(n - self.previous))
             else:
-                # Next valid pitch outside the range, folded by whole octaves.
-                output = self.previous + sign
-                while output % 12 not in allowed:
-                    output += sign
-                while output > self.high:
-                    output -= 12
-                while output < self.low:
-                    output += 12
+                self.boundary_reason = "RANGE_LIMIT"
+                output = self.rebase(candidates, allowed)
         else:
             output = min(candidates, key=lambda n: (abs(n - self.previous), n))
         self.previous = output
@@ -162,6 +174,8 @@ class Voice:
     received: float
     due: float
     note: int | None = None
+    released: float | None = None
+    boundary_started: bool = False
 
 
 def note_name(note):
@@ -171,6 +185,7 @@ def note_name(note):
 class LoopianEngine:
     """FIFO input ownership plus an ordered, bounded MIDI output queue."""
     LIMIT = 4096
+    PHRASE_GAP = 0.060
 
     def __init__(self, target, song, timing=Timing(), report=None):
         self.target, self.song, self.timing, self.report = target, song, timing, report
@@ -181,6 +196,9 @@ class LoopianEngine:
         self.queue = []
         self.sequence = 0
         self.last_due = 0
+        self.resume_at = 0
+        self.sustain = 0
+        self.restore_sustain = False
 
     def schedule(self, due, kind, voice, velocity=0):
         if len(self.queue) >= self.LIMIT:
@@ -193,7 +211,9 @@ class LoopianEngine:
             if message.control in (120, 123):
                 self.close()
             elif message.control == 64:
-                self.target.send(message.copy(channel=0, time=0))
+                self.sustain = message.value
+                if not self.restore_sustain:
+                    self.target.send(message.copy(channel=0, time=0))
             return
         if message.type not in ("note_on", "note_off"):
             return  # No pitch bend/raw MIDI thru that could bypass the palette.
@@ -210,6 +230,7 @@ class LoopianEngine:
             voice = self.held[key].popleft()
             if not self.held[key]:
                 del self.held[key]
+            voice.released = now
             # Shift release by the same amount as attack, including short taps.
             self.schedule(max(voice.due + 0.001, now + (voice.due - voice.received)),
                           "off", voice, message.velocity)
@@ -218,13 +239,44 @@ class LoopianEngine:
         while self.queue and self.queue[0][0] <= now:
             due, _, kind, voice, velocity = heapq.heappop(self.queue)
             if kind == "off":
+                # A range boundary may have deferred an already queued short tap.
+                release_due = max(voice.due + 0.001,
+                                  voice.released + (voice.due - voice.received))
+                if release_due > now:
+                    self.schedule(release_due, "off", voice, velocity)
+                    continue
                 if voice.note is not None and self.sounding.get(voice.note) is voice:
                     self.target.send(mido.Message("note_off", note=voice.note, velocity=velocity))
                     del self.sounding[voice.note]
                 continue
+            if now < self.resume_at:
+                voice.due = self.resume_at
+                self.schedule(voice.due, "on", voice)
+                continue
             context = self.song.at(now)  # Harmony at actual output, even across a bar boundary.
             previous = self.pitch.previous
-            note = self.pitch.choose(voice.gesture, context)
+            note = self.pitch.choose(voice.gesture, context, range_restart=voice.boundary_started)
+            reason = self.pitch.boundary_reason
+            if reason == "RANGE_LIMIT" and not voice.boundary_started:
+                # End the old phrase audibly, not merely by relabeling an octave jump.
+                self.target.send(mido.Message("control_change", control=64, value=0))
+                for sounding in list(self.sounding):
+                    self.target.send(mido.Message("note_off", note=sounding))
+                    del self.sounding[sounding]
+                self.restore_sustain = True
+                self.pitch.previous = previous
+                voice.boundary_started = True
+                voice.due = now + self.PHRASE_GAP
+                self.resume_at = voice.due
+                self.schedule(voice.due, "on", voice)
+                if self.report:
+                    edge = "ceiling" if voice.gesture.direction == "UP" else "floor"
+                    self.report(f"Range {edge} reached\nPhrase boundary detected\n"
+                                f"Reason: RANGE_LIMIT\nPhrase gap: {self.PHRASE_GAP * 1000:g}ms")
+                continue
+            if self.restore_sustain:
+                self.target.send(mido.Message("control_change", control=64, value=self.sustain))
+                self.restore_sustain = False
             if note in self.sounding:
                 self.target.send(mido.Message("note_off", note=note))
             self.target.send(mido.Message("note_on", note=note, velocity=voice.velocity))
@@ -232,10 +284,12 @@ class LoopianEngine:
             self.sounding[note] = voice
             if self.report:
                 g = voice.gesture
+                boundary = (f"Phrase boundary detected\nReason: {reason}\nPhrase rebase: {note_name(note)}\n"
+                            if reason else "")
                 self.report(f"Input note: {g.note}\nInterval: {g.interval:+d}\nDirection: {g.direction}\n"
                             f"Chord: {context.chord}; Next chord: {context.next_chord}; "
                             f"Bar: {context.bar + 1}; Beat: {context.beat + 1:.3f}\n"
-                            f"Previous output: {note_name(previous)}\nOutput note: {note} ({note_name(note)})\n"
+                            f"Previous output: {note_name(previous)}\n{boundary}Output note: {note} ({note_name(note)})\n"
                             f"Timing: input={voice.received:.4f}s scheduled={due:.4f}s actual={now:.4f}s")
 
     def close(self):
@@ -248,6 +302,9 @@ class LoopianEngine:
         self.gestures = GestureAnalyzer()
         self.pitch.previous = None
         self.last_due = 0
+        self.resume_at = 0
+        self.sustain = 0
+        self.restore_sustain = False
 
 
 def run_loopian(args):
