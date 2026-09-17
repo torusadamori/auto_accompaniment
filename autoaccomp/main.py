@@ -52,6 +52,8 @@ def parser():
     melody.add_argument("--debug-accomp", action="store_true")
     melody.add_argument("--mute-melody", action="store_true",
                         help="Analyze input normally but output only comping and bass (no MIDI thru)")
+    melody.add_argument("--style", choices=("basic", "jazz"), default="basic")
+    melody.add_argument("--seed", type=int, default=1)
     melody.add_argument("--progression-aware", action="store_true",
                         help="Prefer stable progressions and bar boundaries; freeze estimation during rests")
     for name in ("monitor", "raw-monitor", "thru", "test-tone"):
@@ -159,8 +161,8 @@ def melody_accompaniment(args):
             follower = MelodyFollower(target, args.tempo, args.key, args.no_bass, args.no_comping,
                                       report=lambda line: print(line, flush=True),
                                       debug_harmony=args.debug_harmony, debug_accomp=args.debug_accomp,
-                                      progression_aware=args.progression_aware)
-            print("Melody follow: C major, 4-beat history, minimum 2-beat chord hold. Ctrl+C stops.", flush=True)
+                                      progression_aware=args.progression_aware, style=args.style, seed=args.seed)
+            print(f"Melody follow: C major, style={args.style}, seed={args.seed}. Ctrl+C stops.", flush=True)
             if args.mute_melody:
                 print("Melody thru: MUTED (input still used for harmony; only accompaniment is sent).", flush=True)
             if args.debug_accomp:
