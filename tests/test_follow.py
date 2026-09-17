@@ -22,14 +22,16 @@ class FollowTests(unittest.TestCase):
         self.output = Output()
         self.labels = []
         self.follower = Follower(self.output, report=self.labels.append)
+        self.now = 0.0
 
     def keys(self, pitches):
         for channel, pitch in list(self.follower.notes.keys):
-            self.follower.notes.receive(mido.Message("note_off", channel=channel, note=pitch))
+            self.follower.receive(mido.Message("note_off", channel=channel, note=pitch), self.now)
         for pitch in pitches:
-            self.follower.notes.receive(mido.Message("note_on", note=pitch, velocity=85))
+            self.follower.receive(mido.Message("note_on", note=pitch, velocity=85), self.now)
 
     def tick(self, beat):
+        self.now = beat / 2
         self.follower.tick(beat, beat / 2)  # 120 BPM
 
     def test_every_root_quality_and_inversion(self):
@@ -85,7 +87,8 @@ class FollowTests(unittest.TestCase):
             voices = [m.note for m in attacks if m.channel == COMP_CHANNEL]
             self.assertEqual(len(voices), 3)
             self.assertEqual(set(voices), set(self.follower.previous))
-        self.assertEqual(self.labels, [f"Detected chord: {s}" for _, s, _ in sequence])
+        self.assertEqual([s for s in self.labels if s.startswith("Detected chord:")],
+                         [f"Detected chord: {s}" for _, s, _ in sequence])
 
     def test_staggered_press_and_repeated_chord_do_not_spam(self):
         for beat, pitches in ((0, [60]), (0.02, [60, 64]), (0.04, [60, 64, 67])):
@@ -96,9 +99,9 @@ class FollowTests(unittest.TestCase):
             self.tick(beat)
         self.keys([64, 67, 72])
         self.tick(1.5)
-        self.assertEqual(self.labels, ["Detected chord: C"])
+        self.assertEqual([s for s in self.labels if s.startswith("Detected chord:")], ["Detected chord: C"])
 
-    def test_release_and_unknown_stop_and_cancel_pending_syncopation(self):
+    def test_release_and_unknown_preserve_accompaniment(self):
         for pitches in ([], [60, 61, 64, 67]):
             self.setUp()
             self.keys([60, 64, 67])
@@ -109,12 +112,11 @@ class FollowTests(unittest.TestCase):
             self.tick(3.7)
             self.tick(3.8)
             self.tick(4)
-            self.assertIsNone(self.follower.current)
-            self.assertFalse(self.follower.scheduler.queue)
-            self.assertFalse(self.follower.scheduler.active)
+            self.assertEqual(self.follower.current.symbol, "C")
+            self.assertEqual(self.follower.detected.symbol, "C")
             count = len(self.output.messages)
             self.tick(5)
-            self.assertEqual(len(self.output.messages), count)
+            self.assertTrue(any(m.type == "note_on" for m in self.output.messages[count:]))
 
     def test_new_chord_cancels_old_pending_offbeat_without_touching_thru(self):
         self.keys([60, 64, 67])
@@ -137,9 +139,68 @@ class FollowTests(unittest.TestCase):
         class Source:
             def poll(self):
                 return next(iterator, None)
-        forward_pending(Source(), self.output, on_message=self.follower.notes.receive)
+        forward_pending(Source(), self.output, on_message=lambda msg: self.follower.receive(msg, 0))
         self.assertEqual(self.output.messages, messages)
         self.assertEqual(detect(self.follower.notes.pitch_classes).symbol, "C")
+        self.tick(0)
+        self.tick(0.2)
+        self.tick(1)
+        self.assertEqual(self.follower.current.symbol, "C")
+
+    def test_timed_short_chords_survive_release_before_window_and_beat(self):
+        sequence = [([60, 64, 67], "C", 36), ([57, 60, 64], "Am", 45),
+                    ([62, 65, 69], "Dm", 38), ([55, 59, 62, 65], "G7", 43)]
+        self.tick(0)
+        for second, (pitches, symbol, bass_root) in enumerate(sequence):
+            start = second + 0.1
+            for i, pitch in enumerate(pitches):
+                now = start + i * 0.018
+                self.follower.receive(mido.Message("note_on", note=pitch), now)
+                self.follower.tick(now * 2, now)
+                # Every key is released BEFORE the collection window closes.
+                self.follower.receive(mido.Message("note_off", note=pitch), now + 0.01)
+            self.assertFalse(self.follower.notes.keys)
+            self.follower.tick((start + 0.079) * 2, start + 0.079)
+            self.assertNotEqual(self.follower.detected.symbol if self.follower.detected else None, symbol)
+            self.follower.tick((start + 0.081) * 2, start + 0.081)
+            self.assertEqual(self.follower.detected.symbol, symbol)
+            count = len(self.output.messages)
+            self.follower.tick(second * 2 + 1, second + 0.5)
+            attacks = [m for m in self.output.messages[count:] if m.type == "note_on"]
+            self.assertEqual([m.note for m in attacks if m.channel == BASS_CHANNEL], [bass_root])
+            self.assertEqual(len([m for m in attacks if m.channel == COMP_CHANNEL]), 3)
+            self.assertIn(f"Active accompaniment chord: {symbol}", self.labels)
+            self.follower.tick(second * 2 + 2, second + 1)
+            self.assertEqual(self.follower.current.symbol, symbol)
+
+    def test_window_is_anchored_to_first_note_not_restarted(self):
+        for now, pitch in ((0, 60), (0.035, 64), (0.07, 67)):
+            self.follower.receive(mido.Message("note_on", note=pitch), now)
+            self.follower.tick(now * 2, now)
+        self.assertIsNone(self.follower.detected)
+        self.follower.tick(0.162, 0.081)
+        self.assertEqual(self.follower.detected.symbol, "C")
+        self.assertIn("Held notes: [60, 64, 67]", self.labels)
+        count = len(self.labels)
+        for i in range(82, 200):
+            self.follower.tick(i / 500, i / 1000)
+        self.assertEqual(len(self.labels), count)
+
+    def test_releasing_seventh_does_not_reinterpret_as_triad(self):
+        self.keys([60, 64, 67, 71])
+        self.tick(0.2)
+        self.tick(1)
+        self.follower.receive(mido.Message("note_off", note=71), 0.6)
+        self.follower.tick(2, 1)
+        self.assertEqual(self.follower.current.symbol, "Cmaj7")
+
+    def test_unknown_before_first_chord_stays_silent(self):
+        self.keys([60, 61])
+        self.tick(0.2)
+        self.tick(1)
+        self.assertIsNone(self.follower.current)
+        self.assertFalse(self.output.messages)
+        self.assertIn("Detected chord: Unknown", self.labels)
 
     def test_triads_use_seventh_coloring(self):
         for symbol, extended in (("C", "Cmaj7"), ("Am", "Am7")):

@@ -15,9 +15,11 @@ class Follower:
         self.no_bass = no_bass
         self.no_comping = no_comping
         self.report = report
-        self.signature = None
-        self.settled_signature = None
-        self.changed_at = 0.0
+        self.collection_seconds = 0.08
+        self.collection_deadline = None
+        self.collected = set()
+        self.held_display = None
+        self.next_held_report = 0.0
         self.label = None
         self.detected = None
         self.current = None
@@ -25,19 +27,42 @@ class Follower:
         self.chord_start = 0
         self.previous = None
 
+    def receive(self, message, now=None):
+        """Collect attacks for 80ms from the first attack, retaining short notes."""
+        now = time.perf_counter() if now is None else now
+        self.finish_collection(now)
+        self.notes.receive(message)
+        if message.type == "note_on" and message.velocity > 0:
+            if self.collection_deadline is None:
+                self.collection_deadline = now + self.collection_seconds
+                self.collected = {note for _, note in self.notes.keys}
+            self.collected.add(message.note)
+
+    def finish_collection(self, now):
+        if self.collection_deadline is None or now < self.collection_deadline:
+            return
+        pcs = {note % 12 for note in self.collected}
+        result = detect(pcs)
+        # During legato changes old keys may overlap the collection window.
+        if result is None:
+            result = detect(self.notes.pitch_classes)
+        label = result.symbol if result else "Unknown"
+        if label != self.label:
+            self.report(f"Collected notes: {sorted(self.collected)}")
+            self.report(f"Detected chord: {label}")
+            self.label = label
+        if result is not None:
+            self.detected = result  # Last VALID chord; releases/Unknown never erase it.
+        self.collection_deadline = None
+        self.collected.clear()
+
     def tick(self, beat, now):
-        signature = self.notes.pitch_classes
-        if signature != self.signature:
-            self.signature = signature
-            self.changed_at = now
-        # Collect slightly staggered chord key presses without delaying MIDI thru.
-        if signature != self.settled_signature and now - self.changed_at >= 0.04:
-            self.settled_signature = signature
-            self.detected = detect(signature)
-            label = self.detected.symbol if self.detected else ("Unknown" if signature else "(no notes)")
-            if label != self.label:
-                self.report(f"Detected chord: {label}")
-                self.label = label
+        self.finish_collection(now)
+        held = sorted({note for _, note in self.notes.keys})
+        if held != self.held_display and now >= self.next_held_report:
+            self.report(f"Held notes: {held}")
+            self.held_display = held
+            self.next_held_report = now + 0.08
 
         boundary = int(beat)
         if boundary != self.last_beat:
@@ -46,6 +71,7 @@ class Follower:
                 self.scheduler.clear()
                 self.current = self.detected
                 self.chord_start = boundary
+                self.report(f"Active accompaniment chord: {self.current.symbol}")
             if self.current is not None:
                 age = boundary - self.chord_start
                 phase = age % BEATS_PER_BAR

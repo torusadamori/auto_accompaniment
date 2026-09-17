@@ -59,3 +59,18 @@
 - UNO Q関連のコード・設定・スクリプト・既存のUNO Qテストは変更なし。
 - 物理鍵盤での認識、実音、演奏時の遅延と追従感は未確認。
   [第二MVPの実演テスト](docs/PC_FOLLOW_MVP.md)で評価する。
+
+## follow入力収集・コード保持の修正（2026-09-17）
+
+- 最初のNote Onから80msの固定収集窓を設け、窓内で離鍵された短いノートも収集に保持。
+- 全離鍵・Unknownは最後の有効コードを上書きしない。新しい有効コードでのみ次拍切替。
+- Held notes / Collected notes / Detected chord / Active accompaniment chordを変化時に表示。
+- 93テスト中90件成功、従来と同じ環境条件の3件スキップ。
+- 追加検証: 18ms間隔のNote Onと各10ms後のNote Offで、収集終了前に全離鍵しても
+  C→Am→Dm→G7を認識し、次拍でコンピングとベースが送出される。
+- 0/35/70msの押鍵で80ms後に確定し、後続音による窓延長がないことを確認。
+- 疑似MIDI入力を実時間でFollowerへ渡し、実際のMicrosoft GS Wavetable Synth出力へ送信。
+  ch2の伴奏Note Onは12件、ch3のベースNote Onは8件、遅延スキップ0件。
+  全コードでDetected / Active表示が一致し、最終コードG7を離鍵後も保持。
+- 上記は疑似入力による実出力確認。物理鍵盤を弾く再検証と聴感評価は未実施。
+- 固定playの生成器、UNO Q関連コード・設定・スクリプトは変更なし。

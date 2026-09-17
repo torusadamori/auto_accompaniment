@@ -127,7 +127,7 @@ def follow_accompaniment(args):
                                 report=lambda line: print(line, flush=True))
             print("Follow mode: play a chord. Changes apply on the next beat; Ctrl+C stops.", flush=True)
             run_follow(follower, args.tempo, args.bars,
-                       lambda: forward_pending(source, target, on_message=follower.notes.receive))
+                       lambda: forward_pending(source, target, on_message=follower.receive))
             print(f"Late attacks skipped: {follower.scheduler.skipped}")
 
 
