@@ -13,12 +13,26 @@ from .follow import Follower, run_follow
 from .melody_follow import MelodyFollower
 from .output_diagnostics import AuditedOutput, configure_melody_output
 from .input_diagnostics import monitor, raw_monitor
+from .melody_recording import record, replay
 
 
 def parser():
     result = argparse.ArgumentParser(description="PC AutoAccomp MVP (Ctrl+C to stop)")
     commands = result.add_subparsers(dest="command", required=True)
     commands.add_parser("ports", help="List MIDI input/output devices")
+    recording = commands.add_parser("record-melody", help="Record timestamped MIDI input to JSON; Ctrl+C saves")
+    recording.add_argument("--input", required=True)
+    recording.add_argument("--output-file", required=True)
+    recording.add_argument("--tempo", type=float, default=TEMPO)
+    recording.add_argument("--seconds", type=float, default=0)
+    playback = commands.add_parser("replay-melody", help="Replay the same recorded input for basic/jazz comparison")
+    playback.add_argument("--input-file", required=True)
+    playback.add_argument("--output", required=True)
+    playback.add_argument("--style", choices=("basic", "jazz"), default="basic")
+    playback.add_argument("--seed", type=int, default=1)
+    playback.add_argument("--tempo", type=float, help="Override harmony tempo; recorded timing stays unchanged")
+    playback.add_argument("--mute-melody", action="store_true")
+    playback.add_argument("--debug-accomp", action="store_true")
     clock = commands.add_parser("progression", help="Run the fixed 4/4 chord clock")
     clock.add_argument("--tempo", type=float, default=TEMPO)
     clock.add_argument("--bars", type=int, default=0)
@@ -79,6 +93,9 @@ def main():
             return
         if args.command == "play":
             play_accompaniment(args)
+            return
+        if args.command in ("record-melody", "replay-melody"):
+            (record if args.command == "record-melody" else replay)(args)
             return
         if args.command == "follow":
             follow_accompaniment(args)

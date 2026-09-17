@@ -170,3 +170,20 @@
   最終調整後は全テストを再実行済み。実鍵盤・聴感による音楽性の比較は未実施。
 - 未来のコードは予測しない。次拍への変更予約がある4拍目だけ接続先を使用し、未定なら現在ルートへ接続。
 - 詳細は [第五MVPの比較手順](docs/PC_JAZZ_MVP.md)。play/follow・UNO Q関連は変更なし。
+
+## 録音によるA/B比較（2026-09-17）
+
+- record-melodyで入力のMIDIバイト列と経過マイクロ秒をJSON保存。Ctrl+Cで保存、上書き防止。
+- replay-melodyは保存時刻で既存MelodyFollowerを駆動してから実時間再生。
+  両styleともprogression-aware・同一音色と音量設定を使用し、OSの待機揺れを推定から分離。
+- 追加6テストで録音時刻/Velocity/離鍵保存、Ctrl+C保存、上書き防止、同seed再現、
+  両styleの入力完全一致、ミュート前後の伴奏完全一致、非整数テンポでの音解放、
+  CLI入口→実send境界の件数/デバッグ表示一致、待機ジッタの影響分離、不正ファイル拒否を検証。
+- 全148テスト中145件成功、既存と同じ環境条件で3件スキップ。
+- 同じ疑似入力JSON（28イベント/8秒、hash b67ff7438e5b0d5a、120 BPM、seed1）を
+  実際のMicrosoft GS Wavetable Synth 0へbasic→jazzの順に送信。
+  両方ともミュート有効、Comping=21 / Bass=15 / Melody=0、コード変更2回。
+  basicは拍1:C→6:F→12:Dm、jazzは拍1:C→8:F→12:Dm。
+  最大実送信遅れはbasic16.7ms、jazz0.8ms（OS依存、生成イベントは再現可能）。
+- 今回の実鍵盤録音と聴感A/B評価は未実施。実ポート送信と疑似入力による検証を区別する。
+- 手順は [録音によるA/B比較](docs/PC_AB_COMPARISON.md)。既存モード・UNO Qコードは変更なし。

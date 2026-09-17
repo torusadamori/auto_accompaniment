@@ -118,6 +118,7 @@ Loopian_RustはMIT Licenseです。コードを直接再利用する場合は、
 - [第三MVP: 単音メロディ追従](docs/PC_MELODY_MVP.md) — C major固定の履歴採点でコードを推定するmelody-followモード
 - [第四MVP: コード進行を考慮](docs/PC_PROGRESSION_MVP.md) — progression-awareオプションで遷移・小節位置・休符中の安定性を比較
 - [第五MVP: jazzスタイル](docs/PC_JAZZ_MVP.md) — 小節中心のコード変更、ジャズボイシング、コンピングとベースの改善
+- [録音によるA/B比較](docs/PC_AB_COMPARISON.md) — 1回のMIDI演奏をbasic/jazzへ同条件で再生
 - [Concept Review](docs/CONCEPT_REVIEW.md) — Claude等に設計レビューを依頼するための文書
 - [Development Specification](docs/DEVELOPMENT_SPEC.md) — 実装仕様、時間モデル、モジュール構成、マイルストーン
 - [M3 BLE to MCU LED](docs/M3_BLE_TO_MCU.md) — ホストBLE受信から内蔵LEDまでの最小統合テスト
