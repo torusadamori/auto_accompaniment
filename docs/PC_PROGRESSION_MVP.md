@@ -18,6 +18,46 @@ Set-Location D:\GitProjects\Music\auto_accompaniment
 `--tempo` / `--bars` / `--no-comping` / `--no-bass` / `--debug-accomp` も従来どおり使えます。
 `--debug-accomp` は変更拍の発音を強調するため、音楽性の比較時は外してください。
 
+## 伴奏が聞こえない場合の送出確認
+
+`--debug-harmony` は推定ログだけです。実送信ログには `--debug-accomp` を併用してください。
+
+```powershell
+.\.venv\Scripts\python.exe -m autoaccomp.main melody-follow --input "MIDIFlex4 1" --output "Microsoft GS Wavetable Synth 0" --progression-aware --debug-harmony --debug-accomp
+```
+
+検証時の音色はch1 Piano、ch2 Electric Piano（GM program 4、0始まり）、ch3 Acoustic Bass。
+チャンネル音量は88/108/112、Expressionは127に設定し、コンピングと低いベースを区別しやすくします。
+オプションなしの音色設定は従来どおりです。`play` / `follow` の設定には変更ありません。
+`--debug-accomp` は変更拍の発音も強調するため、通常の音楽性比較では外してください。
+
+実行開始時に出力先、各パートのチャンネル・音色、ミュート有無を表示します。
+伴奏発音時はsend成功後の `Accompaniment output` / `Comping notes` / `Bass note` が表示されます。
+Ctrl+Cまたは有限小節終了時には、成功したNote On件数を次の形式で表示します。
+
+```text
+Sent MIDI Note On: Melody=14 Comping=21 Bass=15
+```
+
+数値は演奏によって変わります。Comping/Bassが0なら、推定コードの確定、ミュート指定、
+`Late attacks skipped` を確認してください。3パートの件数が増えているのに聞こえない場合は、
+Windowsの再生先・音量と音源側の受信設定を確認してください。
+有効コードを一度入力してから離鍵すると、メロディだけ止まり伴奏は続くため区別しやすくなります。
+
+コード上の経路は以下です。
+
+```text
+main.melody_accompaniment
+ → forward_pending（入力スルーもここで送信）
+ → MelodyFollower.receive → MelodyHistory
+ → MelodyFollower.tick → ProgressionEstimator.estimate
+ → engine.detected → Follower.tick_accompaniment
+ → comping.generate / walking_bass.generate → Scheduler.add / tick
+ → DebugOutput.send → AuditedOutput.send → MIDIポート.send
+```
+
+表示はポート送信成功の確認であり、スピーカーからの実音を録音して検証したものではありません。
+
 ## 採点ルール
 
 総合点は `melody + transition + hold + bar` です。

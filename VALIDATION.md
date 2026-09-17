@@ -118,3 +118,18 @@
   に `--progression-aware --debug-harmony --bars 1` を付け、正常起動・終了を確認。
   この区間では押鍵を受信せず、空履歴の候補表示はなし。
 - 実鍵盤での流れ・聴感評価は未確認。play/followとUNO Q関連コードは変更なし。
+
+## melody-followのCLI統合と実送信確認（2026-09-17）
+
+- コード追跡では推定→engine.detected→tick_accompaniment→生成器→Scheduler→sendは接続済み。
+  `--debug-accomp` のCLI伝達も既存実装にあり、`--debug-harmony` 単独では送信ログを表示しない。
+  ユーザー環境の聴感上の無伴奏の原因は断定していない。
+- 検証時のみch1 Piano / ch2 Electric Piano / ch3 Acoustic Bassとし、CC7音量とCC11を設定。
+  出力先・チャンネル・ミュート有無・成功Note On件数を追加表示。
+- main()入口から推定器・生成器・Schedulerまで本物を動かすCLI統合テストを追加。
+  時刻と物理ポート境界だけを置換し、送信ログとsendイベントの全ノート一致、
+  メロディ即時スルー、3パート、音色、Note Offと終了処理を検証。
+- 実送信確認ではCLIの入力だけを疑似鍵盤に置換し、出力は実際のGS音源ポートを使用。
+  120 BPM・4小節でC→F→Dm、Melody=14 / Comping=21 / Bass=15のNote On送信成功。
+  実送信ノート表示あり、遅延スキップ0件。スピーカー実音と物理鍵盤での再評価は未実施。
+- 全125テスト中122件成功、従来と同じ環境条件で3件スキップ。

@@ -46,6 +46,8 @@ Set-Location D:\GitProjects\Music\auto_accompaniment
 表示スコアは確率ではありません。ヒステリシスで最高点以外の現コードを保持する場合があります。
 
 実出力ノートも見たい場合は `--debug-accomp` を追加できます。
+`--debug-harmony` と同時指定可能です。検証時はch2がElectric Pianoになり、
+3パートの音量とExpressionを明示設定します。終了時に各パートの送信Note On件数を表示します。
 第二MVPと同様、このオプションは変更拍の和音をルート配置で強調します。
 通常の音楽性を評価するときは外してください。
 

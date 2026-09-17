@@ -11,6 +11,7 @@ from .scheduler import Scheduler
 from .midi_io import list_ports, input_port, output_port, forward_pending
 from .follow import Follower, run_follow
 from .melody_follow import MelodyFollower
+from .output_diagnostics import AuditedOutput, configure_melody_output
 
 
 def parser():
@@ -150,19 +151,31 @@ def follow_accompaniment(args):
 
 
 def melody_accompaniment(args):
-    with output_port(args.output) as target:
+    with output_port(args.output) as port:
         with input_port(args.input) as source:
-            for channel in (MELODY_CHANNEL, COMP_CHANNEL):
-                target.send(mido.Message("program_change", channel=channel, program=0))
-            target.send(mido.Message("program_change", channel=BASS_CHANNEL, program=32))
+            target = AuditedOutput(port) if args.debug_accomp else port
+            configure_melody_output(target, args.debug_accomp)
             follower = MelodyFollower(target, args.tempo, args.key, args.no_bass, args.no_comping,
                                       report=lambda line: print(line, flush=True),
                                       debug_harmony=args.debug_harmony, debug_accomp=args.debug_accomp,
                                       progression_aware=args.progression_aware)
             print("Melody follow: C major, 4-beat history, minimum 2-beat chord hold. Ctrl+C stops.", flush=True)
-            run_follow(follower, args.tempo, args.bars,
-                       lambda: forward_pending(source, target, on_message=follower.receive), start=follower.start)
-            print(f"Late attacks skipped: {follower.scheduler.skipped}")
+            if args.debug_accomp:
+                print(f"MIDI OUT: {args.output}", flush=True)
+                print(f"Melody: ch{MELODY_CHANNEL+1} Piano; "
+                      f"Comping: ch{COMP_CHANNEL+1} Electric Piano; "
+                      f"Bass: ch{BASS_CHANNEL+1} Acoustic Bass (low register).", flush=True)
+                print(f"Comping: {'muted' if args.no_comping else 'enabled'}; "
+                      f"Bass: {'muted' if args.no_bass else 'enabled'}.", flush=True)
+            elif args.debug_harmony:
+                print("Harmony logging only. Add --debug-accomp to see successful MIDI sends.", flush=True)
+            try:
+                run_follow(follower, args.tempo, args.bars,
+                           lambda: forward_pending(source, target, on_message=follower.receive), start=follower.start)
+            finally:
+                print(f"Late attacks skipped: {follower.scheduler.skipped}")
+                if args.debug_accomp:
+                    print(target.summary(), flush=True)
 
 
 if __name__ == "__main__":
