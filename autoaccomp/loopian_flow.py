@@ -40,6 +40,7 @@ class FlowCandidate:
     contour_match: bool
     repetition_cost: float
     motif_bonus: float
+    phrase_cost: float = 0
 
 
 @dataclass(frozen=True)
@@ -75,12 +76,13 @@ class FlowSelector:
         self.holds = 0
         self.last_selection = None
 
-    def window(self, song, cursor, allowed):
+    def window(self, song, cursor, allowed, tones=None):
+        tones = allowed[:4] if tones is None else tones
         result = []
         for position in range(max(0, cursor - self.window_size), cursor + self.window_size + 1):
             source = song.melody[position % len(song.melody)]
             context = song.context_for(position)
-            role = "PRIMARY" if source.note % 12 in allowed[:4] else (
+            role = "PRIMARY" if source.note % 12 in tones else (
                 "SECONDARY" if source.note % 12 in allowed else "OUTSIDE")
             result.append(WindowEvent(position, source, context.bar, context.beat, role))
         return tuple(result)
@@ -123,8 +125,8 @@ class FlowSelector:
 
     def select(self, pitch, song, gesture, cursor, palettes, range_restart=False):
         context = song.context_for(cursor)
-        allowed = palettes[context.chord]
-        window = self.window(song, cursor, allowed)
+        allowed, tones = context.allowed, context.chord_tones
+        window = self.window(song, cursor, allowed, tones)
         source = song.melody[cursor % len(song.melody)]
         probe = copy(pitch)
         base_note = probe.choose(gesture, context, range_restart=range_restart, material=source)
@@ -132,7 +134,7 @@ class FlowSelector:
         # Boundaries use the proven Phase 2 rebase. In particular, a RANGE_LIMIT
         # preview consumes neither RNG nor memory while the real gap is pending.
         if pitch.previous is None or probe.boundary_reason:
-            role = "PRIMARY" if base_note % 12 in allowed[:4] else "SECONDARY"
+            role = "PRIMARY" if base_note % 12 in tones else "SECONDARY"
             candidate = FlowCandidate(cursor, base_note, 0, role, False, 0, 0)
             return FlowSelection(cursor, candidate, context, probe, window, (candidate,),
                                  (candidate,), strength, speed)
@@ -147,7 +149,7 @@ class FlowSelector:
             if other.bar != context.bar or other.chord != context.chord:
                 break
             positions.append(index)
-        if self.amount >= 0.25 and cursor and not self.holds:
+        if self.amount >= 0.25 and cursor and not self.holds and source.phrase_break != "STRONG":
             other = song.context_for(cursor - 1)
             if other.bar == context.bar and other.chord == context.chord:
                 positions.append(cursor - 1)  # one hold allowed, never reverse the cursor
@@ -157,17 +159,23 @@ class FlowSelector:
         if gesture.direction in ("UP", "DOWN"):
             sign = 1 if gesture.direction == "UP" else -1
             notes = [n for n in notes if 0 < (n - previous) * sign <= leap]
+            if not notes:
+                notes = [base_note]  # Sparse palettes: Phase 2's nearest valid directional note.
         else:
             notes = [base_note]  # SAME retains Phase 2's hold/chord-change semantics.
-        strong = (any(0 <= context.beat - beat < 0.25 for beat in (0, 2))
+        strong = (any(0 <= context.beat - beat < 0.25 for beat in context.accents)
                   or pitch.change_notes > 0 or pitch.last_chord != context.chord)
-        primary = [n for n in notes if n % 12 in allowed[:4]]
+        primary = [n for n in notes if n % 12 in tones]
         if strong and primary and pitch.tone_priority == "chord":
             notes = primary
         penalty = 4 if strong else 2.5 if speed == "SLOW" else 1 if speed == "FAST" else 1.5
         candidates = []
         for position in positions:
             material = song.melody[position % len(song.melody)]
+            crossed = [song.melody[i % len(song.melody)].phrase_break for i in range(cursor + 1, position + 1)]
+            if crossed.count("STRONG") > 1:
+                continue
+            phrase_cost = 3 * crossed.count("STRONG") + 0.75 * crossed.count("WEAK")
             advance = position + 1 - cursor
             proximity = 0.6 * abs(position - cursor) + (0.7 if advance == 0 else 0)
             if speed == "FAST" and advance != 1:
@@ -189,16 +197,16 @@ class FlowSelector:
                     target = previous + (step if gesture.direction == "UP" else -step)
                 else:
                     target = previous
-                role = "PRIMARY" if note % 12 in allowed[:4] else "SECONDARY"
+                role = "PRIMARY" if note % 12 in tones else "SECONDARY"
                 chord_cost = penalty if role == "SECONDARY" and pitch.tone_priority == "chord" else 0
-                identity_bonus = (0.25 if strong and note % 12 in (allowed[1], allowed[3]) else 0)
+                identity_bonus = (0.25 if strong and note % 12 in tuple(tones[i] for i in (1, 3) if i < len(tones)) else 0)
                 distance = abs(note - previous)
                 repeat = self.repetition_cost(note, gesture.direction, history)
                 cost = (0.75 * abs(note - target)
                         + 0.25 * min((note - material.note) % 12, (material.note - note) % 12)
                         + (0.3 if strength == "SMALL" else 0.15) * distance
-                        + proximity + contour + chord_cost + repeat - motif - importance - identity_bonus)
-                candidates.append(FlowCandidate(position, note, cost, role, match, repeat, motif))
+                        + proximity + contour + chord_cost + repeat + phrase_cost - motif - importance - identity_bonus)
+                candidates.append(FlowCandidate(position, note, cost, role, match, repeat, motif, phrase_cost))
         candidates.sort(key=lambda c: (c.cost, abs(c.position - cursor), c.position, c.note))
         # At most three genuinely close choices. Bad candidates never enter the lottery.
         finalists = tuple(c for c in candidates[:3] if c.cost <= candidates[0].cost + 1.5 * self.amount)
@@ -208,6 +216,7 @@ class FlowSelector:
         probe.selection_reason = (f"FLOW {gesture.direction} + {selected.role} + melody-near; "
                                   f"contour agreement={selected.contour_match}; "
                                   f"motif bonus={selected.motif_bonus:.2f}; repetition cost={selected.repetition_cost:.2f}; "
+                                  f"phrase cost={selected.phrase_cost:.2f}; "
                                   f"advance={selected.position + 1 - cursor}; weighted top-{len(finalists)}")
         return FlowSelection(cursor, selected, context, probe, window, tuple(candidates), finalists, strength, speed)
 
@@ -222,7 +231,7 @@ class FlowSelector:
     def debug(self, selection, song, note_name):
         window = "\n".join(f"  idx{e.position % len(song.melody)} {note_name(e.source.note)} {e.role} "
                            f"{e.source.contour} bar={e.bar + 1} beat={e.beat + 1:g} "
-                           f"duration={e.source.duration:g} velocity={e.source.velocity}" for e in selection.window)
+                           f"duration={e.source.duration:g} velocity={e.source.velocity} phrase={e.source.phrase_break}" for e in selection.window)
         candidates = "\n".join(f"  idx{c.position % len(song.melody)} {note_name(c.note)} {c.role} "
                                f"cost={c.cost:.3f}" for c in selection.candidates[:6])
         selected = selection.selected

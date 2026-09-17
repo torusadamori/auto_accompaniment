@@ -15,12 +15,18 @@ from .output_diagnostics import AuditedOutput, configure_melody_output
 from .input_diagnostics import monitor, raw_monitor
 from .melody_recording import record, replay
 from .loopian import run_loopian
+from .midi_analysis import analyze_midi, format_analysis
 
 
 def parser():
     result = argparse.ArgumentParser(description="PC AutoAccomp MVP (Ctrl+C to stop)")
     commands = result.add_subparsers(dest="command", required=True)
     commands.add_parser("ports", help="List MIDI input/output devices")
+    analysis = commands.add_parser("analyze-midi", help="Inspect SMF melody candidates, key, meter and harmony without MIDI ports")
+    analysis.add_argument("--midi-file", required=True)
+    analysis.add_argument("--melody-track", type=int)
+    analysis.add_argument("--melody-channel", type=int, choices=range(1, 17))
+    analysis.add_argument("--chords", nargs="+", help="Override harmony (C, Am, G7, Cmaj7, Dm7, Bdim, Bm7b5, Csus4, etc.)")
     loopian = commands.add_parser("loopian", help="Shape keyboard gestures using an authored C-major song")
     loopian.add_argument("--input", required=True)
     loopian.add_argument("--output", required=True)
@@ -33,11 +39,12 @@ def parser():
     loopian.add_argument("--flow-window", type=int, default=3, help="FLOW source radius, 1..8 notes (default: 3)")
     loopian.add_argument("--flow-strength", type=float, default=0.5, help="FLOW variation 0..1; 0 matches transform")
     loopian.add_argument("--seed", type=int, help="Reproducible FLOW variation; omitted = fresh local seed")
+    loopian.add_argument("--source-accent", type=float, default=0, help="Optional source accent influence 0..1; at most +/-6 velocity")
     loopian.add_argument("--bars", type=int, default=0)
-    loopian.add_argument("--chords", nargs="+", choices=("Cmaj7", "Dm7", "G7"),
+    loopian.add_argument("--chords", nargs="+",
                         help="Override MIDI chord markers with a repeating one-chord-per-bar progression")
-    loopian.add_argument("--range-low", "--note-min", dest="note_min", type=int, default=48)
-    loopian.add_argument("--range-high", "--note-max", dest="note_max", type=int, default=96)
+    loopian.add_argument("--range-low", "--note-min", "--output-low", dest="note_min", type=int, default=48)
+    loopian.add_argument("--range-high", "--note-max", "--output-high", dest="note_max", type=int, default=96)
     loopian.add_argument("--grid", type=int, choices=(0, 8, 16),
                         help="0 disables timing correction (default: MIDI=0, gesture=16)")
     loopian.add_argument("--timing-strength", type=float, default=0.5)
@@ -118,6 +125,9 @@ def main():
     try:
         if args.command == "ports":
             list_ports()
+            return
+        if args.command == "analyze-midi":
+            print(format_analysis(analyze_midi(args.midi_file, args.melody_track, args.melody_channel), args.chords))
             return
         if args.command == "loopian":
             run_loopian(args)

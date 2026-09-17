@@ -4,17 +4,19 @@ Times are seconds relative to the transport start; beats are quarter notes.
 Phase 1 uses authored data, not a transcription of Loopian's implementation.
 """
 from collections import defaultdict, deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import cached_property
 import heapq
 import math
 import time
+import statistics
 
 import mido
 
 from .midi_io import input_port, output_port
 from .midi_melody import MidiMelody, load_melody
 from .loopian_flow import FlowSelector
+from .midi_analysis import analyze_midi, chord_palette, parse_chord, meter_position, strong_beats, format_analysis
 
 
 PALETTES = {
@@ -44,6 +46,19 @@ class MusicalContext:
     next_chord: str
     melody: tuple
     melody_range: tuple
+    primary: tuple = ()
+    secondary: tuple = ()
+    accents: tuple = (0, 2)
+    harmony_confidence: float = 1.0
+    harmony_source: str = "authored"
+
+    @property
+    def chord_tones(self):
+        return self.primary if self.primary or self.secondary else PRIMARY[self.chord]
+
+    @property
+    def allowed(self):
+        return self.primary + self.secondary if self.primary or self.secondary else PALETTES[self.chord]
 
 
 @dataclass(frozen=True)
@@ -88,21 +103,34 @@ class MidiSong:
     chords: tuple | None = None
     tempo_override: float | None = None
     output_range: tuple = (48, 96)
+    adapt_register: bool = False
 
     def __post_init__(self):
         FixedSong(tempo=120 if self.tempo_override is None else self.tempo_override,
-                  chords=self.chords if self.chords is not None else DEFAULT_CHORDS,
+                  chords=self.chords if self.chords is not None and self.source.analysis is None else DEFAULT_CHORDS,
                   output_range=self.output_range)
-        if self.chords is None and any(c not in PALETTES for _, c in self.source.chord_markers):
+        if self.source.analysis is not None and self.chords:
+            for chord in self.chords:
+                parse_chord(chord)
+        if self.source.analysis is None and self.chords is None and any(c not in PALETTES for _, c in self.source.chord_markers):
             raise ValueError("MIDI Chord: markers must be Cmaj7, Dm7 or G7; use --chords to override.")
 
     @property
     def tempo(self):
         return self.tempo_override if self.tempo_override is not None else self.source.tempo_at(0)
 
-    @property
+    @cached_property
+    def register_shift(self):
+        if not self.adapt_register:
+            return 0
+        pitches = [n.note for n in self.source.notes]
+        desired = round(((sum(self.output_range) / 2) - statistics.median(pitches)) / 12)
+        octaves = min((127 - max(pitches)) // 12, max(math.ceil(-min(pitches) / 12), desired))
+        return 12 * octaves
+
+    @cached_property
     def melody(self):
-        return self.source.notes
+        return tuple(replace(n, note=n.note + self.register_shift) for n in self.source.notes) if self.register_shift else self.source.notes
 
     @cached_property
     def melody_range(self):
@@ -111,6 +139,18 @@ class MidiSong:
     def context_for(self, position):
         cycle, index = divmod(position, len(self.melody))
         beat = self.melody[index].beat
+        if self.source.analysis is not None:
+            analysis = self.source.analysis
+            bar, within, meter = meter_position(analysis.meters, beat)
+            harmony = analysis.harmony_at(beat, self.chords)
+            following = analysis.harmony_at(self.melody[(index + 1) % len(self.melody)].beat, self.chords)
+            primary, secondary = chord_palette(harmony.chord) if harmony.chord else ((), analysis.key.scale)
+            return MusicalContext(self.tempo_override if self.tempo_override is not None else self.source.tempo_at(beat),
+                                  analysis.key.name, cycle * analysis.bars + bar, within,
+                                  harmony.chord or f"{analysis.key.name} scale",
+                                  following.chord or f"{analysis.key.name} scale", self.melody, self.melody_range,
+                                  primary, secondary, strong_beats(meter.numerator, meter.denominator),
+                                  harmony.confidence, harmony.source)
         local_bar = int(beat // 4)
         chords = self.chords if self.chords is not None else DEFAULT_CHORDS
         chord = chords[local_bar % len(chords)]
@@ -169,15 +209,17 @@ class PitchShaper:
         self.boundary_reason = None
         self.rebase_zone = None
 
-    def phrase_note(self, candidates, allowed, anchor):
-        primary = [n for n in candidates if n % 12 in allowed[:4]]
+    def phrase_note(self, candidates, allowed, anchor, tones=None):
+        tones = allowed[:4] if tones is None else tones
+        primary = [n for n in candidates if n % 12 in tones]
         # Register/distance first; prefer 3rd, 7th, root, 5th on ties.
-        identity = (allowed[1], allowed[3], allowed[0], allowed[2])
+        identity = tuple(tones[i] for i in (1, 3, 0, 2) if i < len(tones))
         return min(primary or candidates,
                    key=lambda n: (abs(n - anchor), identity.index(n % 12)
                                   if n % 12 in identity else 4, n))
 
-    def scored_note(self, candidates, allowed, strong):
+    def scored_note(self, candidates, allowed, strong, tones=None):
+        tones = allowed[:4] if tones is None else tones
         nearest = min(abs(n - self.previous) for n in candidates)
         # Never buy chord colour with a leap larger than a fourth, unless
         # even the nearest valid note is farther away (e.g. a custom range).
@@ -192,13 +234,14 @@ class PitchShaper:
                 abs(n - target)
                 + 0.25 * min((n - self.material.note) % 12, (self.material.note - n) % 12)
                 + 0.15 * abs(n - self.previous)
-                + (penalty if self.tone_priority == "chord" and n % 12 not in allowed[:4] else 0),
-                n % 12 not in allowed[:4], abs(n - self.previous), n))
+                + (penalty if self.tone_priority == "chord" and n % 12 not in tones else 0),
+                n % 12 not in tones, abs(n - self.previous), n))
         return min(nearby, key=lambda n: (
-            abs(n - self.previous) + (0 if n % 12 in allowed[:4] else penalty),
-            n % 12 not in allowed[:4], abs(n - self.previous), n))
+            abs(n - self.previous) + (0 if n % 12 in tones else penalty),
+            n % 12 not in tones, abs(n - self.previous), n))
 
-    def rebase(self, candidates, allowed, direction):
+    def rebase(self, candidates, allowed, direction, tones=None):
+        tones = allowed[:4] if tones is None else tones
         if direction == "SAME":
             self.rebase_zone = "PREVIOUS"
             return min(candidates, key=lambda n: (abs(n - self.previous), n))
@@ -209,22 +252,22 @@ class PitchShaper:
         self.rebase_zone = "LOW_MID" if direction == "UP" else "HIGH_MID"
         interior = candidates[1:-1] or candidates
         zone = [n for n in interior if zone_low <= n <= zone_high] or interior
-        chord_tones = [n for n in zone if n % 12 in allowed[:4]]
+        chord_tones = [n for n in zone if n % 12 in tones]
         center = (zone_low + zone_high) / 2
         if self.tone_priority == "chord":
-            return self.phrase_note(zone, allowed, center)
+            return self.phrase_note(zone, allowed, center, tones)
         return min(chord_tones or zone, key=lambda n: (abs(n - center), n))
 
     def choose(self, gesture, context, range_restart=False, material=None):
         self.material = material if gesture.direction in ("UP", "DOWN") else None
         self.boundary_reason = None
         self.rebase_zone = None
-        allowed = PALETTES[context.chord]
+        allowed, tones = context.allowed, context.chord_tones
         changed = self.last_chord is not None and self.last_chord != context.chord
         if changed:
             self.change_notes = 2
         # Zero-based beats 0 and 2: first sixteenth-note window of beats 1/3.
-        strong_beat = any(0 <= context.beat - beat < 0.25 for beat in (0, 2))
+        strong_beat = any(0 <= context.beat - beat < 0.25 for beat in context.accents)
         strong = strong_beat or self.change_notes > 0
         self.selection_reason = ("flat nearest" if self.tone_priority == "flat" else
                                  "PRIMARY weighted + direction/distance; " +
@@ -233,39 +276,39 @@ class PitchShaper:
         candidates = [n for n in range(self.low, self.high + 1) if n % 12 in allowed]
         if range_restart:
             self.boundary_reason = "RANGE_LIMIT"
-            output = self.rebase(candidates, allowed, gesture.direction)
+            output = self.rebase(candidates, allowed, gesture.direction, tones)
         elif self.previous is None:
             # Begin near the authored melody register, independent of the input key.
             anchor = material.note if material is not None else sum(context.melody_range) / 2
-            chord_tones = [n for n in candidates if n % 12 in allowed[:4]]
+            chord_tones = [n for n in candidates if n % 12 in tones]
             output = min(chord_tones or candidates, key=lambda n: (abs(n - anchor), n))
             if self.tone_priority == "chord":
-                output = self.phrase_note(candidates, allowed, anchor)
+                output = self.phrase_note(candidates, allowed, anchor, tones)
         elif gesture.elapsed is not None and gesture.elapsed >= self.phrase_gap:
             self.boundary_reason = "INPUT_PAUSE"
-            output = self.rebase(candidates, allowed, gesture.direction)
+            output = self.rebase(candidates, allowed, gesture.direction, tones)
         elif gesture.direction in ("UP", "DOWN"):
             sign = 1 if gesture.direction == "UP" else -1
             directional = [n for n in candidates if (n - self.previous) * sign > 0]
             if directional:
                 output = min(directional, key=lambda n: abs(n - self.previous))
                 if self.tone_priority == "chord" or material is not None:
-                    output = self.scored_note(directional, allowed, strong)
+                    output = self.scored_note(directional, allowed, strong, tones)
             else:
                 self.boundary_reason = "RANGE_LIMIT"
-                output = self.rebase(candidates, allowed, gesture.direction)
+                output = self.rebase(candidates, allowed, gesture.direction, tones)
         else:
             self.material = None  # SAME preserves pitch; never applies a source interval.
             output = min(candidates, key=lambda n: (abs(n - self.previous), n))
             if self.tone_priority == "chord" and self.change_notes:
-                output = self.scored_note(candidates, allowed, True)
+                output = self.scored_note(candidates, allowed, True, tones)
             else:
                 self.selection_reason = "SAME: preserve/nearest allowed"
         if self.tone_priority == "chord" and (self.previous is None or self.boundary_reason):
             self.selection_reason = "phrase PRIMARY + nearest register (3rd/7th/root/5th tie-break)"
             if gesture.direction == "SAME" and self.previous is not None:
                 if self.change_notes:
-                    output = self.scored_note(candidates, allowed, True)
+                    output = self.scored_note(candidates, allowed, True, tones)
                 self.selection_reason = "SAME: preserve/nearest allowed; chord-change weighting only"
         self.last_chord = context.chord
         self.change_notes = max(0, self.change_notes - 1)
@@ -273,6 +316,8 @@ class PitchShaper:
             if self.selection_reason == "flat nearest":
                 self.selection_reason = "flat melody contour + source pitch class + distance"
             self.selection_reason += f"; input {gesture.direction} + melody {material.contour} ({material.interval:+d})"
+        if not tones:
+            self.selection_reason = "key-scale fallback; " + self.selection_reason
         self.previous = output
         return output
 
@@ -324,7 +369,10 @@ class LoopianEngine:
     PHRASE_GAP = 0.060
 
     def __init__(self, target, song, timing=Timing(), report=None, phrase_gap=0.7, tone_priority="chord",
-                 mode="gesture", flow_window=3, flow_strength=0.5, seed=None):
+                 mode="gesture", flow_window=3, flow_strength=0.5, seed=None, source_accent=0):
+        if not math.isfinite(source_accent) or not 0 <= source_accent <= 1:
+            raise ValueError("Source accent must be finite and between 0 and 1.")
+        self.source_accent = source_accent
         if mode not in ("gesture", "melody-direct", "melody-transform", "melody-flow"):
             raise ValueError("Unknown Loopian mode.")
         if mode != "gesture" and not isinstance(song, MidiSong):
@@ -461,7 +509,8 @@ class LoopianEngine:
                 self.restore_sustain = False
             if note in self.sounding:
                 self.target.send(mido.Message("note_off", note=note))
-            self.target.send(mido.Message("note_on", note=note, velocity=voice.velocity))
+            adjustment = max(-6, min(6, round((material.velocity - 80) / 8 * self.source_accent))) if material else 0
+            self.target.send(mido.Message("note_on", note=note, velocity=max(1, min(127, voice.velocity + adjustment))))
             if selection is not None:
                 voice.melody_position = selection.selected.position
                 self.melody_position = selection.next_position
@@ -470,15 +519,18 @@ class LoopianEngine:
             self.sounding[note] = voice
             if self.report:
                 g = voice.gesture
+                original = self.song.source.notes[voice.melody_position % len(self.song.melody)] if material else None
                 melody_debug = (f"MIDI melody index: {voice.melody_position % len(self.song.melody)}; "
                                 f"Step: {voice.melody_position + 1}\n"
-                                f"Original note: {material.note} ({note_name(material.note)})\n"
+                                f"Original note: {original.note} ({note_name(original.note)}); "
+                                f"Register-adapted material: {material.note} ({note_name(material.note)})\n"
                                 f"Original contour: {material.contour} ({material.interval:+d})\n"
+                                f"Source phrase: {material.phrase_break}; IOI: {material.onset_interval:g} beats\n"
                                 f"Source tick: {material.tick}; Beat: {material.beat:g}; "
                                 f"Duration: {material.duration:g}; Track: {material.track}; "
                                 f"Channel: {material.channel + 1}\n" if material else "")
-                role = ("PRIMARY chord-tone" if note % 12 in PRIMARY[context.chord] else
-                        "SECONDARY tension" if note % 12 in SECONDARY[context.chord] else "ORIGINAL outside palette")
+                role = ("PRIMARY chord-tone" if note % 12 in context.chord_tones else
+                        "SECONDARY tension" if note % 12 in context.allowed else "ORIGINAL outside palette")
                 boundary = (f"Phrase boundary detected\nReason: {reason}\nDirection: {g.direction}\n"
                             f"Rebase zone: {self.pitch.rebase_zone}\nPhrase rebase: {note_name(note)}\n"
                             if reason else "")
@@ -489,6 +541,8 @@ class LoopianEngine:
                             f"Bar: {context.bar + 1}; Beat: {context.beat + 1:.3f}\n"
                             f"Previous output: {note_name(previous)}\n{boundary}Output note: {note} ({note_name(note)})\n"
                             f"Role: {role}\n"
+                            f"Harmony source: {context.harmony_source}; confidence={context.harmony_confidence:.2f}\n"
+                            + ("Harmony fallback: key-scale\n" if context.harmony_source == "key-scale" else "") +
                             f"Tone priority: {self.pitch.tone_priority}; Selection: {self.pitch.selection_reason}\n"
                             f"Timing: input={voice.received:.4f}s scheduled={due:.4f}s actual={now:.4f}s")
 
@@ -517,9 +571,14 @@ def run_loopian(args):
     if args.midi_file:
         if mode == "gesture":
             raise ValueError("--midi-file requires a melody mode.")
-        song = MidiSong(load_melody(args.midi_file, args.melody_track, args.melody_channel),
+        analysis = analyze_midi(args.midi_file, args.melody_track, args.melody_channel)
+        song = MidiSong(analysis.as_melody(),
                        tuple(args.chords) if args.chords is not None else None, args.tempo,
-                       (args.note_min, args.note_max))
+                       (args.note_min, args.note_max), adapt_register=mode != "melody-direct")
+        print(format_analysis(analysis, args.chords, detailed=False), flush=True)
+        if args.debug_loopian:
+            print(f"Original melody median: {statistics.median(n.note for n in analysis.melody):g}\n"
+                  f"Applied register shift: {song.register_shift:+d}", flush=True)
     else:
         if mode != "gesture" or args.melody_track is not None or args.melody_channel is not None:
             raise ValueError("Melody modes/selectors require --midi-file.")
@@ -530,6 +589,8 @@ def run_loopian(args):
     timing = Timing(grid, args.timing_strength, args.timing_window_ms / 1000)
     phrase_gap = args.phrase_gap_ms / 1000
     PitchShaper(*song.output_range, phrase_gap=phrase_gap, tone_priority=args.tone_priority)
+    if not math.isfinite(args.source_accent) or not 0 <= args.source_accent <= 1:
+        raise ValueError("Source accent must be finite and between 0 and 1.")
     if mode == "melody-flow":
         FlowSelector(args.flow_window, args.flow_strength, args.seed)  # Validate before opening ports.
     if args.bars < 0:
@@ -539,8 +600,9 @@ def run_loopian(args):
         engine = LoopianEngine(target, song, timing,
                                (lambda line: print(line, flush=True)) if args.debug_loopian else None,
                                phrase_gap=phrase_gap, tone_priority=args.tone_priority, mode=mode,
-                               flow_window=args.flow_window, flow_strength=args.flow_strength, seed=args.seed)
-        print(f"Loopian ready: {mode}, C major, 4/4, {song.tempo:g} BPM; grid={grid}. Ctrl+C stops.", flush=True)
+                               flow_window=args.flow_window, flow_strength=args.flow_strength, seed=args.seed,
+                               source_accent=args.source_accent)
+        print(f"Loopian ready: {mode}, {song.tempo:g} BPM; grid={grid}. Ctrl+C stops.", flush=True)
         if args.midi_file:
             stepping = "FLOW local search" if engine.flow_active else "one Note On = one step"
             print(f"MIDI material: {len(song.melody)} notes; tracks={song.source.tracks}; "

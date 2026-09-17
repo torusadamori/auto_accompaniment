@@ -2,6 +2,7 @@
 
 素材位置周辺の探索と弱い変奏を加えた `melody-flow` は [Phase 3](LOOPIAN_PHASE3.md) を参照してください。
 この文書のdirect / transformは従来のまま利用できます。
+実曲の自動選択・和声推定・拍子変更は [Phase 4](LOOPIAN_PHASE4.md) で追加しました。以下の旧解析制限は低レベル互換APIについての説明で、現在のCLIはPhase 4の解析層を使用します。
 
 既存MIDIは演奏素材です。入力がなければ発音もメロディ位置の進行もありません。
 velocityが正のNote Onを1回受けるたびに、素材をちょうど1音消費します。

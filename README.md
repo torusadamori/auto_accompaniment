@@ -1,8 +1,9 @@
 # Auto Accompaniment
 
-現在の主軸は **Loopian Phase 3: FLOW的フレーズ変奏** です。
-MIDI素材の小さな探索窓から、人間の方向・ジェスチャーの大きさ・速度・コード・短い履歴を使って音と素材位置を選びます。
-起動方法と実鍵盤A/B/Cテストは [Loopian Phase 3](docs/LOOPIAN_PHASE3.md) を参照してください。
+現在の主軸は **Loopian Phase 4: 実曲MIDI解析と自動メロディ・和声抽出** です。
+Type 0/1 MIDIのtrack/channel別メロディ候補、コード、キー、拍子・テンポ変更、休符由来のフレーズ境界を解析します。
+まず `analyze-midi` で確認し、人間のジェスチャーでFLOW演奏できます。手順は [Loopian Phase 4](docs/LOOPIAN_PHASE4.md) を参照してください。
+演奏方式の比較は [Loopian Phase 3](docs/LOOPIAN_PHASE3.md) にあります。
 1押鍵1音で進むdirect / transformの [Loopian Phase 2](docs/LOOPIAN_PHASE2.md) も維持しています。
 MIDIファイルを指定しない [Loopian Phase 1](docs/LOOPIAN_PHASE1.md) も維持しています。
 従来の `play` / `follow` / `melody-follow`、Basic + harmony-stable は独立した既存機能として維持します。
@@ -158,7 +159,7 @@ https://github.com/torusadamori/auto_accompaniment
 
 ## 現在の優先順位
 
-1. PCでLoopian Phase 3のdirect / transform / flowを実鍵盤比較
+1. PCで実曲MIDIの自動判定を確認し、Loopian Phase 4のFLOW演奏を実鍵盤評価
 2. 既存メロディの輪郭参照、入力リズム変形、モチーフ変形へ段階的に発展
 3. FLOW的タイミング補正、QUBIT的フレーズ生成の検討
 

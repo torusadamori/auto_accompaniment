@@ -4,6 +4,7 @@
 入力なしでは発音せず、人間が発音・解放タイミングを決めます。AI生成やLoopian FLOW/QUBITの移植ではありません。
 MIDI未指定のPhase 1、Phase 2の `melody-direct` / `melody-transform` は維持します。
 MIDI指定時の既定モードもtransformのままなので、FLOWは明示的に指定してください。
+現在のCLIは [Phase 4](LOOPIAN_PHASE4.md) の自動メロディ・和声解析を使用します。以下のFLOW規則に加え、実曲の拍子と休符由来のフレーズ境界を参照します。
 
 ## 実鍵盤A/B/C比較
 

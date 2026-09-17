@@ -21,6 +21,11 @@ class SourceNote:
     channel: int  # MIDI wire numbering: 0..15
     interval: int = 0
     rest_before: float = 0
+    onset_interval: float = 0
+    phrase_break: str = "NONE"
+    bar: int = 0
+    bar_beat: float = 0
+    program: int = 0
 
     @property
     def contour(self):
@@ -36,6 +41,7 @@ class MidiMelody:
     chord_markers: tuple  # (beat, chord name); authored 'Chord: Cmaj7' text/markers
     length_beats: float
     tracks: tuple  # selected (index, name)
+    analysis: object | None = None  # optional Phase 4 analysis; legacy loader stays compatible
 
     def tempo_at(self, beat):
         tempo = 500000
