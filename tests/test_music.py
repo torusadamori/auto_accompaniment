@@ -1,11 +1,11 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 import mido
 from autoaccomp.chord_progression import parse_chord, progression
 from autoaccomp import comping, walking_bass
 from autoaccomp.events import Note
 from autoaccomp.scheduler import Scheduler
-from autoaccomp.midi_io import forward_pending
+from autoaccomp.midi_io import forward_pending, output_port
 from autoaccomp.transport import run
 
 
@@ -97,6 +97,18 @@ class MusicTests(unittest.TestCase):
              patch("autoaccomp.transport.time.sleep"):
             run(progression(), 120, 4, lambda bar, chord, nxt: bars.append(bar))
         self.assertEqual(bars, [0, 1, 3])
+
+    def test_output_releases_notes_on_interrupt(self):
+        api = MagicMock()
+        api.get_output_names.return_value = ["Synth"]
+        port = api.open_output.return_value.__enter__.return_value
+        with patch("autoaccomp.midi_io.backend", return_value=api):
+            with self.assertRaises(KeyboardInterrupt):
+                with output_port("Synth"):
+                    raise KeyboardInterrupt
+        port.reset.assert_called_once()
+        port.panic.assert_called_once()
+        api.open_output.return_value.__exit__.assert_called_once()
 
 
 if __name__ == "__main__":

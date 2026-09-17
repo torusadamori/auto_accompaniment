@@ -1,6 +1,7 @@
 """MIDI hardware boundary; musical generators do not import this module."""
 from contextlib import contextmanager
 import mido
+from .config import MELODY_CHANNEL
 
 
 def backend():
@@ -56,4 +57,4 @@ def forward_pending(source, target=None, monitor=False):
             "note_on", "note_off", "polytouch", "aftertouch", "pitchwheel", "control_change"
         }:
             # Melody occupies channel 1; channels 2/3 are reserved for accompaniment.
-            target.send(message.copy(channel=0, time=0))
+            target.send(message.copy(channel=MELODY_CHANNEL, time=0))

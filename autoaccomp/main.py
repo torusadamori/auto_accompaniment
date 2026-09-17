@@ -3,7 +3,7 @@ import argparse
 from contextlib import nullcontext
 import time
 import mido
-from .config import TEMPO, PROGRESSION
+from .config import TEMPO, PROGRESSION, MELODY_CHANNEL, COMP_CHANNEL, BASS_CHANNEL, BEATS_PER_BAR
 from .chord_progression import progression
 from .transport import run
 from . import comping, walking_bass
@@ -60,11 +60,11 @@ def main():
                     time.sleep(0.001)
         else:
             with output_port(args.output) as target:
-                target.send(mido.Message("program_change", channel=0, program=0))
+                target.send(mido.Message("program_change", channel=MELODY_CHANNEL, program=0))
                 if args.command == "test-tone":
-                    target.send(mido.Message("note_on", channel=0, note=60, velocity=70))
+                    target.send(mido.Message("note_on", channel=MELODY_CHANNEL, note=60, velocity=70))
                     time.sleep(0.5)
-                    target.send(mido.Message("note_off", channel=0, note=60))
+                    target.send(mido.Message("note_off", channel=MELODY_CHANNEL, note=60))
                 else:
                     with input_port(args.input) as source:
                         print("MIDI thru ready. Play your keyboard; Ctrl+C stops.", flush=True)
@@ -82,9 +82,9 @@ def play_accompaniment(args):
     chords = progression(args.chords)
     with output_port(args.output) as target:
         with input_port(args.input) if args.input is not None else nullcontext() as source:
-            for channel in (0, 1):
+            for channel in (MELODY_CHANNEL, COMP_CHANNEL):
                 target.send(mido.Message("program_change", channel=channel, program=0))
-            target.send(mido.Message("program_change", channel=2, program=32))
+            target.send(mido.Message("program_change", channel=BASS_CHANNEL, program=32))
             scheduler = Scheduler(target)
             previous = None
 
@@ -92,9 +92,9 @@ def play_accompaniment(args):
                 nonlocal previous
                 if not args.no_comping:
                     events, previous = comping.generate(chord, bar, previous)
-                    scheduler.add(events, bar * 4)
+                    scheduler.add(events, bar * BEATS_PER_BAR)
                 if not args.no_bass:
-                    scheduler.add(walking_bass.generate(chord, next_chord, bar), bar * 4)
+                    scheduler.add(walking_bass.generate(chord, next_chord, bar), bar * BEATS_PER_BAR)
                 print(f"Bar {bar + 1}: {chord.symbol}", flush=True)
 
             def service():
