@@ -1,5 +1,6 @@
 """Timestamped JSON capture and deterministic replay through the live engine."""
 import hashlib
+from contextlib import nullcontext
 import json
 import math
 from pathlib import Path
@@ -19,6 +20,30 @@ def validate_tempo(tempo):
         raise ValueError("Tempo must be between 20 and 300 BPM.")
 
 
+class RecordingClick:
+    """Absolute beat deadlines: GM high/low wood blocks on percussion channel 10."""
+    def __init__(self, output, origin, seconds_per_beat, count_beats, continuous):
+        self.output, self.origin, self.spacing = output, origin, seconds_per_beat
+        self.count_beats, self.continuous = count_beats, continuous
+        self.next_beat = 0
+        self.off = None
+
+    def tick(self, now):
+        if self.off is not None and now >= self.off[0]:
+            self.output.send(mido.Message("note_off", channel=9, note=self.off[1], velocity=0))
+            self.off = None
+        if now < self.origin + self.next_beat*self.spacing:
+            return
+        beat = max(self.next_beat, int((now-self.origin)/self.spacing))
+        self.next_beat = beat+1
+        # Include the recording downbeat even when only the count-in is requested.
+        if not self.continuous and beat > self.count_beats:
+            return
+        note = 76 if beat % 4 == 0 else 77
+        self.output.send(mido.Message("note_on", channel=9, note=note, velocity=110 if beat % 4 == 0 else 85))
+        self.off = (now+0.04, note)
+
+
 def record(args):
     validate_tempo(args.tempo)
     if not math.isfinite(args.seconds) or args.seconds < 0:
@@ -26,20 +51,43 @@ def record(args):
     path = Path(args.output_file)
     if path.suffix.lower() != ".json":
         raise ValueError("Recordings use JSON; specify an output file ending in .json.")
+    count_bars = getattr(args, "count_in_bars", 0)
+    continuous = getattr(args, "click", False)
+    if count_bars < 0:
+        raise ValueError("Count-in bars must be >= 0.")
+    clicking = count_bars > 0 or continuous
+    target = output_port(getattr(args, "output", "Microsoft GS Wavetable Synth 0")) if clicking else nullcontext()
     # Exclusive creation avoids silently overwriting the one performance to compare.
-    with input_port(args.input) as source, path.open("x", encoding="utf-8") as destination:
+    with input_port(args.input) as source, target as click_output, path.open("x", encoding="utf-8") as destination:
         events = []
-        start = time.perf_counter()
+        if clicking:
+            click_output.send(mido.Message("control_change", channel=9, control=7, value=100))
+            click_output.send(mido.Message("control_change", channel=9, control=11, value=127))
+        # Establish the grid only after device/file setup. Never move it to the first note.
+        origin = time.perf_counter() + (0.25 if clicking else 0)
+        start = origin + count_bars*4*60/args.tempo
+        metronome = RecordingClick(click_output, origin, 60/args.tempo, count_bars*4, continuous) if clicking else None
         last_status = start
+        if clicking:
+            print(f"Count-in: {count_bars} bars, 4/4, {args.tempo} BPM. High click = downbeat. "
+                  "Recording starts on the downbeat AFTER the count-in.", flush=True)
         print(f"Recording {source.name} -> {path}; tempo={args.tempo}. Ctrl+C saves and stops.", flush=True)
+        announced = not clicking
         try:
-            while not args.seconds or time.perf_counter()-start < args.seconds:
+            while not args.seconds or time.perf_counter() < start+args.seconds:
+                now = time.perf_counter()
+                if metronome:
+                    metronome.tick(now)
+                if not announced and now >= start:
+                    print("Recording beat 0 / time 0. Play now.", flush=True)
+                    announced = True
                 for _ in range(256):
                     message = source.poll()
                     if message is None:
                         break
-                    if message.type in INPUT_TYPES:
-                        events.append({"time_us": round((time.perf_counter()-start)*1_000_000),
+                    received = time.perf_counter()
+                    if received >= start and message.type in INPUT_TYPES:
+                        events.append({"time_us": round((received-start)*1_000_000),
                                        "bytes": message.bytes()})
                 if time.perf_counter()-last_status >= 5:
                     print(f"Recorded events: {len(events)}", flush=True)
@@ -51,6 +99,7 @@ def record(args):
             duration = max(round((time.perf_counter()-start)*1_000_000),
                            events[-1]["time_us"] if events else 0)
             json.dump({"format": FORMAT, "tempo": args.tempo, "duration_us": duration,
+                       "count_in_bars": count_bars, "beat_zero": "count-in-end" if clicking else "record-start",
                        "events": events}, destination, ensure_ascii=False, indent=2, allow_nan=False)
             print(f"Saved {len(events)} events, {duration/1e6:.3f}s: {path}", flush=True)
 

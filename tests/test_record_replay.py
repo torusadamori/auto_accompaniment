@@ -21,6 +21,69 @@ def inputs():
 
 
 class RecordReplayTests(unittest.TestCase):
+    def synced_recording(self, directory, delay=0, continuous=False):
+        clock = cli.Clock()
+        source, output = cli.Port(clock), cli.Port(clock)
+        source.name = "Keyboard"
+        backend = cli.Backend(source, output)
+        original_open = backend.open_output
+        def open_output(name):
+            clock.now += delay  # Arbitrary command/device setup time before the count-in.
+            return original_open(name)
+        backend.open_output = open_output
+        zero = delay + 0.25 + 4  # Two 4/4 bars at 120 BPM.
+        source.events = [(delay+1, mido.Message("note_on", note=50)),
+                         (delay+1.1, mido.Message("note_off", note=50)),
+                         (zero, mido.Message("note_on", note=60, velocity=91)),
+                         (zero+0.25, mido.Message("note_off", note=60, velocity=13)),
+                         (zero+0.5, mido.Message("note_on", note=64, velocity=82)),
+                         (zero+0.75, mido.Message("note_on", note=64, velocity=0))]
+        sent = []
+        def send(message):
+            sent.append((clock.now, message))
+        output.send = send
+        def sleep(seconds):
+            clock.now = round(clock.now+seconds, 9)
+        path = Path(directory)/f"sync-{delay}-{continuous}.json"
+        argv = ["autoaccomp", "record-melody", "--input", "Keyboard", "--output", "Synth",
+                "--output-file", str(path), "--tempo", "120", "--count-in-bars", "2", "--seconds", "1.1"]
+        if continuous:
+            argv.append("--click")
+        with patch("autoaccomp.midi_io.backend", return_value=backend), \
+             patch("time.perf_counter", clock.counter), patch("time.sleep", sleep), \
+             patch("sys.argv", argv), redirect_stdout(io.StringIO()):
+            main()
+        self.assertTrue(output.reset_called and output.panic_called)
+        return load_recording(path), sent
+
+    def test_count_in_downbeat_is_zero_and_clicks_are_half_second_apart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            (tempo, duration, events), sent = self.synced_recording(directory)
+            self.assertEqual(tempo, 120)
+            self.assertEqual(duration, 1.1)  # Count-in is not part of recorded duration.
+            self.assertEqual([t for t, _ in events], [0, 0.25, 0.5, 0.75])
+            self.assertEqual([m.velocity for _, m in events], [91, 13, 82, 0])
+            clicks = [(t, m) for t, m in sent if m.type == "note_on"]
+            self.assertEqual([t for t, _ in clicks], [0.25+i*0.5 for i in range(9)])
+            self.assertEqual([m.note for _, m in clicks], [76,77,77,77,76,77,77,77,76])
+            for style in ("basic", "jazz"):
+                timeline, _, _ = render(tempo, duration, events, style)
+                self.assertEqual([(t,m) for t,m in timeline if m.channel == 0], events)
+
+    def test_device_setup_wait_does_not_change_recording_phase(self):
+        with tempfile.TemporaryDirectory() as directory:
+            first, _ = self.synced_recording(directory, delay=0)
+            delayed, _ = self.synced_recording(directory, delay=19)
+            self.assertEqual(first, delayed)
+
+    def test_click_continues_after_count_in_without_becoming_recorded_input(self):
+        with tempfile.TemporaryDirectory() as directory:
+            recording, sent = self.synced_recording(directory, continuous=True)
+            clicks = [(t,m) for t,m in sent if m.type == "note_on"]
+            self.assertEqual([t for t,_ in clicks], [0.25+i*0.5 for i in range(11)])
+            self.assertEqual(len(recording[2]), 4)
+            self.assertTrue(all(m.channel == 0 for _,m in recording[2]))
+
     def save(self, path, events=None, duration=8_000_000):
         path.write_text(json.dumps({"format": FORMAT, "tempo": 120, "duration_us": duration,
                                    "events": [{"time_us": round(t*1e6), "bytes": msg.bytes()}
