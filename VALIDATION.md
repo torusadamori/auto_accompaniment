@@ -213,3 +213,17 @@
   5条件のイベント生成を確認。ファイルは変更せず、MIDI実送信・聴感評価は今回は未実施。
   basic: コード変更8/Comping48/Bass34、harmony-stable: 5/51/34、
   jazz-voicing: 8/48/34、smooth-bass: 8/48/34、syncopated-comping: 8/51/34。
+
+## Loopian Phase 1（2026-09-17）
+
+- 独立したloopianモードを追加。固定C-major曲のコード・拍・参照メロディ音域を使い、
+  入力の上昇/下降/SAMEを使用可能音集合内の音へ変換。従来モード・Basic拡張は維持。
+- 新規16テストで方向・全音域境界・3コードの音集合・絶対入力音高からの独立性、
+  軽い1/8・1/16補正、短いタップ、重複Note On、channel別入力、変換Note Off、
+  サステイン/全解放、キュー制限、実CLIの4小節進行・Ctrl+C解放を検証。
+- `.\.venv\Scripts\python.exe -m unittest discover -s tests -v`：
+  全174件中171件成功、3件スキップ（Unix socket 2件、symlink作成権限1件）。
+- CLI helpとgit diff --checkも確認。今回の検証は模擬時計・模擬ポートによるもの。
+  実鍵盤・実音源の送信/聴感・音声遅延評価は未実施。
+- MIDIファイル読み込みは今後の拡張。Phase 1は固定データで完結。
+  [起動と実鍵盤の具体的な評価手順](docs/LOOPIAN_PHASE1.md) を追加。

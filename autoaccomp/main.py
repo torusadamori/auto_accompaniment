@@ -14,12 +14,25 @@ from .melody_follow import MelodyFollower
 from .output_diagnostics import AuditedOutput, configure_melody_output
 from .input_diagnostics import monitor, raw_monitor
 from .melody_recording import record, replay
+from .loopian import DEFAULT_CHORDS, run_loopian
 
 
 def parser():
     result = argparse.ArgumentParser(description="PC AutoAccomp MVP (Ctrl+C to stop)")
     commands = result.add_subparsers(dest="command", required=True)
     commands.add_parser("ports", help="List MIDI input/output devices")
+    loopian = commands.add_parser("loopian", help="Shape keyboard gestures using an authored C-major song")
+    loopian.add_argument("--input", required=True)
+    loopian.add_argument("--output", required=True)
+    loopian.add_argument("--tempo", type=float, default=120)
+    loopian.add_argument("--bars", type=int, default=0)
+    loopian.add_argument("--chords", nargs="+", choices=("Cmaj7", "Dm7", "G7"), default=DEFAULT_CHORDS)
+    loopian.add_argument("--note-min", type=int, default=55)
+    loopian.add_argument("--note-max", type=int, default=84)
+    loopian.add_argument("--grid", type=int, choices=(0, 8, 16), default=16, help="0 disables timing correction")
+    loopian.add_argument("--timing-strength", type=float, default=0.5)
+    loopian.add_argument("--timing-window-ms", type=float, default=30)
+    loopian.add_argument("--debug-loopian", action="store_true")
     recording = commands.add_parser("record-melody", help="Record timestamped MIDI input to JSON; Ctrl+C saves")
     recording.add_argument("--input", required=True)
     recording.add_argument("--output-file", required=True)
@@ -91,6 +104,9 @@ def main():
     try:
         if args.command == "ports":
             list_ports()
+            return
+        if args.command == "loopian":
+            run_loopian(args)
             return
         if args.command == "progression":
             run(progression(args.chords), args.tempo, args.bars,

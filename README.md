@@ -1,5 +1,12 @@
 # Auto Accompaniment
 
+現在の主軸は **Loopian Phase 1: 既存曲の文脈に沿うリアルタイムMIDI整形** です。
+人間の鍵盤入力を上昇・下降のジェスチャーとして読み、固定曲のコード・拍・音域に沿う音程へ変換します。
+起動方法と実鍵盤テストは [Loopian Phase 1](docs/LOOPIAN_PHASE1.md) を参照してください。
+従来の `play` / `follow` / `melody-follow`、Basic + harmony-stable は独立した既存機能として維持します。
+
+以下は従来の伴奏・ハードウェア構想です。
+
 半自動アコーディオンに、リアルタイムのジャズ伴奏生成機能を追加するプロジェクトです。
 
 主旋律は既存のMIDIデータから半自動アコーディオンのソレノイドを駆動して生音で演奏します。伴奏は約40 cmのタッチバーと主旋律MIDIを統合して生成し、Yamaha MU80へMIDI出力してスピーカーから再生します。
@@ -148,6 +155,12 @@ GitHub:
 https://github.com/torusadamori/auto_accompaniment
 
 ## 現在の優先順位
+
+1. PCでLoopian Phase 1の上昇・下降ジェスチャーとコード追従を実鍵盤評価
+2. 既存メロディの輪郭参照、入力リズム変形、モチーフ変形へ段階的に発展
+3. FLOW的タイミング補正、QUBIT的フレーズ生成の検討
+
+### 従来のハードウェア開発計画
 
 1. UNO Q上でBLE MIDI受信を確認
 2. 固定look-ahead付きMIDIイベントキューを実装
