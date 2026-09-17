@@ -58,6 +58,23 @@ main.melody_accompaniment
 
 表示はポート送信成功の確認であり、スピーカーからの実音を録音して検証したものではありません。
 
+## メロディを消して伴奏だけ確認
+
+```powershell
+.\.venv\Scripts\python.exe -m autoaccomp.main melody-follow --input "MIDIFlex4 1" --output "Microsoft GS Wavetable Synth 0" --progression-aware --debug-harmony --debug-accomp --mute-melody
+```
+
+`--mute-melody` は入力をコード推定に使いながら、MIDIスルーだけを無効化します。
+入力ノートやペダルなどは音源へ転送せず、自動コンピングとベースだけを送ります。
+伴奏用の音色設定・終了時の消音は従来どおり送信します。
+`--debug-accomp` 併用時の音量はコンピング108、ベース112で、送信ノート表示も維持します。
+終了時の件数は `Melody=0 Comping=... Bass=...` になります。
+
+起動時の `Melody thru: MUTED` を確認して一本指で弾いてください。
+自分の押鍵音がなく、推定コードに応じた和音と低音だけが鳴るのが期待動作です。
+鍵盤本体の内蔵音源や別アプリが直接鳴らす音は、このオプションの制御対象外です。
+外すと通常の即時スルーに戻ります。play/followには追加していません。
+
 ## 採点ルール
 
 総合点は `melody + transition + hold + bar` です。

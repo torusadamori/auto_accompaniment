@@ -142,6 +142,28 @@ class MelodyCliTests(unittest.TestCase):
             output.send(mido.Message("note_on", note=60))
         self.assertEqual(output.summary(), "Sent MIDI Note On: Melody=0 Comping=0 Bass=0")
 
+    def test_muted_melody_keeps_estimation_and_identical_accompaniment(self):
+        for flags in ([], ["--progression-aware"]):
+            for debug in ([], ["--debug-harmony", "--debug-accomp"]):
+                with self.subTest(flags=flags, debug=debug):
+                    _, normal, _, normal_log = self.exercise(flags + debug)
+                    _, muted, _, muted_log = self.exercise(flags + debug + ["--mute-melody"])
+                    self.assertFalse(any(m.channel == 0 and m.type in ("note_on", "note_off")
+                                         for m in muted.messages))
+                    normal_accomp = [m for m in normal.messages if m.channel in (1, 2)]
+                    muted_accomp = [m for m in muted.messages if m.channel in (1, 2)]
+                    self.assertEqual(muted_accomp, normal_accomp)
+                    for channel in (1, 2):
+                        self.assertTrue(any(m.type == "note_on" and m.channel == channel for m in muted_accomp))
+                    for prefix in ("Estimated chord:", "Active accompaniment chord:"):
+                        self.assertEqual([s for s in muted_log.splitlines() if s.startswith(prefix)],
+                                         [s for s in normal_log.splitlines() if s.startswith(prefix)])
+                    self.assertIn("Melody thru: MUTED", muted_log)
+                    if debug:
+                        self.assertIn("Sent MIDI Note On: Melody=0", muted_log)
+                        self.assertIn("Comping notes:", muted_log)
+                        self.assertIn("Bass note:", muted_log)
+
 
 if __name__ == "__main__":
     unittest.main()

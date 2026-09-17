@@ -50,6 +50,8 @@ def parser():
     melody.add_argument("--no-comping", action="store_true")
     melody.add_argument("--debug-harmony", action="store_true")
     melody.add_argument("--debug-accomp", action="store_true")
+    melody.add_argument("--mute-melody", action="store_true",
+                        help="Analyze input normally but output only comping and bass (no MIDI thru)")
     melody.add_argument("--progression-aware", action="store_true",
                         help="Prefer stable progressions and bar boundaries; freeze estimation during rests")
     for name in ("monitor", "raw-monitor", "thru", "test-tone"):
@@ -159,6 +161,8 @@ def melody_accompaniment(args):
                                       debug_harmony=args.debug_harmony, debug_accomp=args.debug_accomp,
                                       progression_aware=args.progression_aware)
             print("Melody follow: C major, 4-beat history, minimum 2-beat chord hold. Ctrl+C stops.", flush=True)
+            if args.mute_melody:
+                print("Melody thru: MUTED (input still used for harmony; only accompaniment is sent).", flush=True)
             if args.debug_accomp:
                 print(f"MIDI OUT: {args.output}", flush=True)
                 print(f"Melody: ch{MELODY_CHANNEL+1} Piano; "
@@ -170,7 +174,8 @@ def melody_accompaniment(args):
                 print("Harmony logging only. Add --debug-accomp to see successful MIDI sends.", flush=True)
             try:
                 run_follow(follower, args.tempo, args.bars,
-                           lambda: forward_pending(source, target, on_message=follower.receive), start=follower.start)
+                           lambda: forward_pending(source, None if args.mute_melody else target,
+                                                   on_message=follower.receive), start=follower.start)
             finally:
                 print(f"Late attacks skipped: {follower.scheduler.skipped}")
                 if args.debug_accomp:
