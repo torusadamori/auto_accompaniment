@@ -12,6 +12,7 @@ from .midi_io import list_ports, input_port, output_port, forward_pending
 from .follow import Follower, run_follow
 from .melody_follow import MelodyFollower
 from .output_diagnostics import AuditedOutput, configure_melody_output
+from .input_diagnostics import monitor, raw_monitor
 
 
 def parser():
@@ -51,11 +52,11 @@ def parser():
     melody.add_argument("--debug-accomp", action="store_true")
     melody.add_argument("--progression-aware", action="store_true",
                         help="Prefer stable progressions and bar boundaries; freeze estimation during rests")
-    for name in ("monitor", "thru", "test-tone"):
+    for name in ("monitor", "raw-monitor", "thru", "test-tone"):
         command = commands.add_parser(name)
         if name != "test-tone":
             command.add_argument("--input", required=True)
-        if name != "monitor":
+        if name not in ("monitor", "raw-monitor"):
             command.add_argument("--output", required=True)
         command.add_argument("--seconds", type=float, default=0,
                              help="Stop automatically; 0 means until Ctrl+C")
@@ -81,14 +82,12 @@ def main():
         if args.command == "melody-follow":
             melody_accompaniment(args)
             return
+        if args.command in ("monitor", "raw-monitor"):
+            diagnostic = raw_monitor if args.command == "raw-monitor" else monitor
+            diagnostic(args.input, args.seconds)
+            return
         deadline = time.perf_counter() + args.seconds if args.seconds > 0 else float("inf")
-        if args.command == "monitor":
-            with input_port(args.input) as source:
-                print("Listening. Play your keyboard; Ctrl+C stops.", flush=True)
-                while time.perf_counter() < deadline:
-                    forward_pending(source, monitor=True)
-                    time.sleep(0.001)
-        else:
+        if args.command in ("thru", "test-tone"):
             with output_port(args.output) as target:
                 target.send(mido.Message("program_change", channel=MELODY_CHANNEL, program=0))
                 if args.command == "test-tone":

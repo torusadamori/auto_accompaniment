@@ -133,3 +133,15 @@
   120 BPM・4小節でC→F→Dm、Melody=14 / Comping=21 / Bass=15のNote On送信成功。
   実送信ノート表示あり、遅延スキップ0件。スピーカー実音と物理鍵盤での再評価は未実施。
 - 全125テスト中122件成功、従来と同じ環境条件で3件スキップ。
+
+## MIDI入力無反応の調査（2026-09-17）
+
+- Git比較で7a3d872→de7f30dのmidi_io.py差分なし。monitorのopen/poll/1ms待機も同一。
+- 起動・無受信・受信件数を表示するmonitorと、python-rtmidi直接raw-monitorを追加。
+- ユーザーが実鍵盤を演奏中にMIDIFlex4 1（index 1）を各25秒、順番に観測。
+  Mido経由でNote Onとvelocity=0の離鍵を実受信。
+  RtMidi直接でも194件のノートイベントを受信。疑似入力は使用していない。
+- 例: note_on channel=0 note=48 velocity=85、note_on channel=0 note=48 velocity=0。
+- 無反応の原因は未確定。入力処理・ドライバの修復変更なしで受信できた。
+- 全131テスト中128件成功、従来と同じ環境条件で3件スキップ。
+- 詳細は [MIDI入力診断](docs/MIDI_INPUT_DIAGNOSTICS.md)。伴奏アルゴリズム・UNO Q関連は変更なし。

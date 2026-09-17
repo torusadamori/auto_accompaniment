@@ -112,6 +112,7 @@ Loopian_RustはMIT Licenseです。コードを直接再利用する場合は、
 
 ## 開発文書
 
+- [MIDI入力診断](docs/MIDI_INPUT_DIAGNOSTICS.md) — monitor/raw-monitor、Git比較と実鍵盤の受信確認
 - [PC版 自動伴奏MVP](docs/PC_MVP.md) — WindowsでMIDIキーボード・コード伴奏・ウォーキングベースを評価するコンソールアプリ
 - [第二MVP: リアルタイム追従](docs/PC_FOLLOW_MVP.md) — 押鍵コードを認識し、次の拍から伴奏を切り替えるfollowモード
 - [第三MVP: 単音メロディ追従](docs/PC_MELODY_MVP.md) — C major固定の履歴採点でコードを推定するmelody-followモード
