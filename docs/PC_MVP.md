@@ -1,6 +1,9 @@
 # PC AutoAccomp MVP
 
 Windows / Python 3.12。プロジェクト内の仮想環境を使用します。
+以下のコマンドはリポジトリルート `D:\GitProjects\Music\auto_accompaniment` で実行してください。
+UNO Q版とは独立したPC用アプリです。ルートの `requirements.txt` はPC版用で、
+UNO Q版は従来どおり `m3/requirements.txt` を使用します。
 
 ```powershell
 python -m venv .venv

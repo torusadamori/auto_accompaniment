@@ -112,6 +112,7 @@ Loopian_RustはMIT Licenseです。コードを直接再利用する場合は、
 
 ## 開発文書
 
+- [PC版 自動伴奏MVP](docs/PC_MVP.md) — WindowsでMIDIキーボード・コード伴奏・ウォーキングベースを評価するコンソールアプリ
 - [Concept Review](docs/CONCEPT_REVIEW.md) — Claude等に設計レビューを依頼するための文書
 - [Development Specification](docs/DEVELOPMENT_SPEC.md) — 実装仕様、時間モデル、モジュール構成、マイルストーン
 - [M3 BLE to MCU LED](docs/M3_BLE_TO_MCU.md) — ホストBLE受信から内蔵LEDまでの最小統合テスト
