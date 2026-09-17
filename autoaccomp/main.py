@@ -6,7 +6,7 @@ import mido
 from .config import TEMPO, PROGRESSION
 from .chord_progression import progression
 from .transport import run
-from . import comping
+from . import comping, walking_bass
 from .scheduler import Scheduler
 from .midi_io import list_ports, input_port, output_port, forward_pending
 
@@ -25,6 +25,8 @@ def parser():
     play.add_argument("--tempo", type=float, default=TEMPO)
     play.add_argument("--bars", type=int, default=0)
     play.add_argument("--chords", nargs="+", default=PROGRESSION)
+    play.add_argument("--no-bass", action="store_true", help="Listen to comping only")
+    play.add_argument("--no-comping", action="store_true", help="Listen to bass only")
     for name in ("monitor", "thru", "test-tone"):
         command = commands.add_parser(name)
         if name != "test-tone":
@@ -82,13 +84,17 @@ def play_accompaniment(args):
         with input_port(args.input) if args.input is not None else nullcontext() as source:
             for channel in (0, 1):
                 target.send(mido.Message("program_change", channel=channel, program=0))
+            target.send(mido.Message("program_change", channel=2, program=32))
             scheduler = Scheduler(target)
             previous = None
 
             def on_bar(bar, chord, next_chord):
                 nonlocal previous
-                events, previous = comping.generate(chord, bar, previous)
-                scheduler.add(events, bar * 4)
+                if not args.no_comping:
+                    events, previous = comping.generate(chord, bar, previous)
+                    scheduler.add(events, bar * 4)
+                if not args.no_bass:
+                    scheduler.add(walking_bass.generate(chord, next_chord, bar), bar * 4)
                 print(f"Bar {bar + 1}: {chord.symbol}", flush=True)
 
             def service():
